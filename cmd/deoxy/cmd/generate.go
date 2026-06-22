@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -66,13 +65,13 @@ and Rustdoc (Rust) comment styles.`,
 			// Resolve the path
 			absPath, err := filepath.Abs(p)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: cannot resolve path %q: %v\n", p, err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: cannot resolve path %q: %v\n", p, err)
 				continue
 			}
 
 			edits, err := w.Generate(absPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: processing %q: %v\n", p, err)
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: processing %q: %v\n", p, err)
 				continue
 			}
 
@@ -83,37 +82,37 @@ and Rustdoc (Rust) comment styles.`,
 				if dryRunFlag {
 					// Show what would be done
 					relPath := relPathOrName(edit.FilePath, p)
-					fmt.Printf("[dry-run] %s: %d comment(s) to insert\n", relPath, len(edit.Insertions))
+					cmd.Printf("[dry-run] %s: %d comment(s) to insert\n", relPath, len(edit.Insertions))
 					for _, ins := range edit.Insertions {
-						fmt.Printf("  - %s (line %d)\n", ins.SymbolName, ins.Line)
+						cmd.Printf("  - %s (line %d)\n", ins.SymbolName, ins.Line)
 					}
 				} else if diffFlag {
 					// Show the diff
 					relPath := relPathOrName(edit.FilePath, p)
-					fmt.Printf("=== %s ===\n", relPath)
-					fmt.Printf("--- a/%s\n", relPath)
-					fmt.Printf("+++ b/%s\n", relPath)
+					cmd.Printf("=== %s ===\n", relPath)
+					cmd.Printf("--- a/%s\n", relPath)
+					cmd.Printf("+++ b/%s\n", relPath)
 					for _, ins := range edit.Insertions {
-						fmt.Printf("+ Insert comment for %s at line %d\n", ins.SymbolName, ins.Line)
+						cmd.Printf("+ Insert comment for %s at line %d\n", ins.SymbolName, ins.Line)
 						for _, line := range strings.Split(ins.Content, "\n") {
-							fmt.Printf("+%s\n", line)
+							cmd.Printf("+%s\n", line)
 						}
 					}
 				} else {
 					// Normal mode - already written by writer
 					relPath := relPathOrName(edit.FilePath, p)
-					fmt.Printf("✓ %s: %d comment(s) inserted\n", relPath, len(edit.Insertions))
+					cmd.Printf("\u2713 %s: %d comment(s) inserted\n", relPath, len(edit.Insertions))
 				}
 			}
 		}
 
 		if totalFiles == 0 {
-			fmt.Println("No files processed.")
+			cmd.Println("No files processed.")
 			return nil
 		}
 
 		if !diffFlag {
-			fmt.Printf("\nProcessed %d file(s), %d comment(s) generated.\n", totalFiles, totalInsertions)
+			cmd.Printf("\nProcessed %d file(s), %d comment(s) generated.\n", totalFiles, totalInsertions)
 		}
 
 		return nil

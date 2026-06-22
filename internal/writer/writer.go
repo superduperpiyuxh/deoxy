@@ -186,8 +186,21 @@ func (w *Writer) applyComments(filePath string, src []byte, comments []generator
 		}
 
 		// Check if there's already an existing comment above this symbol
-		if !w.force && hasExistingComment(modifiedLines, sc.StartLine) {
-			continue
+		hasComment := hasExistingComment(modifiedLines, sc.StartLine)
+
+		if hasComment {
+			if !w.force {
+				// Skip — preserve existing comment
+				continue
+			}
+			// Force mode: remove the existing comment block first.
+			// The insertion point becomes where the old comment started.
+			commentStart, commentEnd := findCommentBlock(modifiedLines, sc.StartLine)
+			if commentStart >= 0 {
+				nRemoved := commentEnd - commentStart
+				modifiedLines = append(modifiedLines[:commentStart], modifiedLines[commentEnd:]...)
+				sc.StartLine -= nRemoved
+			}
 		}
 
 		// Determine indentation from the target line
@@ -268,6 +281,71 @@ func hasExistingComment(lines []string, lineIdx int) bool {
 	}
 
 	return false
+}
+
+// findCommentBlock finds the range of an existing comment block above the given
+// line index. Returns (startLine, endLine) where startLine is the first line of
+// the comment block (inclusive) and endLine is the first non-comment line after
+// the block (exclusive). Returns (-1, -1) if no comment block is found.
+func findCommentBlock(lines []string, lineIdx int) (int, int) {
+	if lineIdx <= 0 {
+		return -1, -1
+	}
+
+	// Walk backwards from lineIdx-1, skipping blank lines
+	i := lineIdx - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
+	}
+
+	if i < 0 {
+		return -1, -1
+	}
+
+	// Check if we found a comment line
+	trimmed := strings.TrimSpace(lines[i])
+	isComment := strings.HasPrefix(trimmed, "//") ||
+		strings.HasPrefix(trimmed, "#") ||
+		strings.HasPrefix(trimmed, "///") ||
+		strings.HasPrefix(trimmed, "\"\"\"") ||
+		strings.HasPrefix(trimmed, "'''") ||
+		strings.HasPrefix(trimmed, "/*") ||
+		strings.HasPrefix(trimmed, "*") ||
+		strings.HasPrefix(trimmed, "*/")
+
+	if !isComment {
+		return -1, -1
+	}
+
+	// endLine is lineIdx (or i+1 if there were blank lines between comment and lineIdx)
+	endLine := lineIdx
+	if i+1 < lineIdx {
+		// There were blank lines between the comment and the target
+		// Include them in the block to remove
+		endLine = i + 1
+	}
+
+	// Walk further back to find the start of the comment block
+	// Include contiguous comment lines and blank lines between them
+	startLine := i
+	for startLine > 0 {
+		prev := strings.TrimSpace(lines[startLine-1])
+		if strings.HasPrefix(prev, "//") ||
+			strings.HasPrefix(prev, "#") ||
+			strings.HasPrefix(prev, "///") ||
+			strings.HasPrefix(prev, "\"\"\"") ||
+			strings.HasPrefix(prev, "'''") ||
+			strings.HasPrefix(prev, "/*") ||
+			strings.HasPrefix(prev, "*") ||
+			strings.HasPrefix(prev, "*/") ||
+			prev == "" {
+			startLine--
+		} else {
+			break
+		}
+	}
+
+	return startLine, endLine
 }
 
 // insertComment inserts a doc comment before the given line index, preserving

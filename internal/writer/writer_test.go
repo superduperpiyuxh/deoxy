@@ -70,6 +70,7 @@ func TestInsertComment(t *testing.T) {
 			indent:  "    ",
 			want: []string{
 				"type Foo struct {",
+				"",
 				"    // Bar does bar stuff",
 				"    Bar() int",
 				"}",
