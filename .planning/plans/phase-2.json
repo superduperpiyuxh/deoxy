@@ -1,0 +1,990 @@
+{
+  "phase": 2,
+  "name": "Template Engine",
+  "description": "Given SymbolInfo from Phase 1 (function/method/struct/class signatures with names, parameters, return types, receivers), deoxy renders proper doc comments in each target language's format. This phase builds the template engine (Go text/template-based), per-language template definitions (GoDoc prose, Doxygen for C/C++, Google-style Python docstrings, Rustdoc), the configuration system (.deoxy.yaml loading), and the generator orchestrator that wires config → scanner → parser → engine into the final pipeline. No source file modification (Phase 3) — only in-memory rendering with verification tests.",
+  "module": "github.com/superduperpiyuxh/deoxy",
+  "go_version": "1.26.3",
+  "anti_goals": [
+    "Do NOT insert comments into source files (that is Phase 3 — CLI integration)",
+    "Do NOT implement CLI commands (Phase 3 introduces cobra commands: generate, init, watch)",
+    "Do NOT build the VS Code extension sidecar (Phase 4)",
+    "Do NOT implement smart text / name inference (Phase 5 — getter/setter/ctor detection, name splitting)",
+    "Do NOT add AI-generated descriptions (out of scope permanently)",
+    "Do NOT handle watch mode or fsnotify (Phase 3)",
+    "Do NOT modify the tree-sitter query files from Phase 1 — they are stable and correct",
+    "Do NOT add dependencies beyond the Go standard library — text/template is sufficient"
+  ],
+  "roadmap_success_criteria": [
+    "Go function `func Add(a int, b int) int` generates `// Add adds a and b and returns the sum.\n//\n// a is the first operand.\n// b is the second operand.`",
+    "Python function `def greet(name: str, age: int) -> str` generates Google-style docstring with Args: and Returns: sections",
+    "C function `int divide(int dividend, int divisor)` generates `/**\n * @brief ...\n * @param dividend ...\n * @param divisor ...\n * @return ...\n */`",
+    "Template tag order is configurable (brief first vs. param first)",
+    "Go output uses GoDoc convention (prose, no @param tags) by default, configurable to Doxygen-style via config",
+    "Config file (.deoxy.yaml) can set per-language docstyle preferences"
+  ],
+  "tasks": [
+    {
+      "id": "P2-T1",
+      "title": "Create internal/template/engine.go — Core template engine with Render()",
+      "description": "Build the template engine that takes a SymbolInfo struct and a language identifier, applies the language's Go text/template, and returns a formatted doc comment string. The engine provides template helper functions (FuncMap) for brief description generation, parameter/return formatting, and comment-line prefix management. Short descriptions use basic derivation: function name → verb (lowercase first letter + 's' suffix for simple cases, e.g. 'Add' → 'adds'), param descriptions use ordinal templates ('the first operand', 'the second operand'), return descriptions use type-based phrases ('the result', 'the value'). This is intentionally simple — smart text inference comes in Phase 5.",
+      "file": "internal/template/engine.go",
+      "dependencies": ["P2-T3"],
+      "specification": {
+        "package": "template",
+        "imports": [
+          "fmt",
+          "strings",
+          "text/template",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol"
+        ],
+        "types": {
+          "Engine": {
+            "description": "Template engine that renders SymbolInfo into language-specific doc comments using Go text/template. Thread-safe after construction.",
+            "fields": [
+              {"name": "templates", "type": "map[string]*template.Template", "comment": "Compiled templates, keyed by language name ('go', 'python', 'c', 'cpp', 'rust')"},
+              {"name": "funcs", "type": "template.FuncMap", "comment": "Shared helper functions available to all templates"}
+            ],
+            "methods": [
+              "func New(tpls map[string]string) (*Engine, error) — compiles raw template strings into text/template.Template objects; returns error if any template fails to parse",
+              "func (e *Engine) Render(info symbol.SymbolInfo, lang string) (string, error) — executes the template for the given language against SymbolInfo data; returns formatted doc comment string or error if language is unknown"
+            ]
+          }
+        },
+        "template_functions": {
+          "brief": {
+            "signature": "brief(name string, params []symbol.Param, returns []string) string",
+            "behavior": "Generates a brief description sentence from the symbol name and signature. For functions: lowercases first letter of name, appends parameter names with 'and' joining, and appends return phrase. E.g., Name='Add', params=[{a,int},{b,int}], returns=['int'] → 'adds a and b and returns the result.' For methods: includes receiver context. For structs/classes: 'represents a ...'",
+            "examples": [
+              "brief('Add', [{a,int},{b,int}], ['int']) → 'adds a and b and returns the result.'",
+              "brief('greet', [{name,str},{age,int}], ['str']) → 'greets a person with the given name and age.'"
+            ]
+          },
+          "paramDesc": {
+            "signature": "paramDesc(params []symbol.Param, ordinal int) string",
+            "behavior": "Generates a description for a parameter at the given ordinal position. For the first param: 'the first operand' / 'the X to Y'. For second: 'the second operand'. Beyond that: 'the Nth parameter'. Also uses param name as hint (e.g., 'name' → 'the name'). Basic mapping, smart text deferred to Phase 5.",
+            "examples": [
+              "paramDesc([{a,int}], 0) → 'the first operand'",
+              "paramDesc([{name,str}], 0) → 'the name'"
+            ]
+          },
+          "returnDesc": {
+            "signature": "returnDesc(returns []string) string",
+            "behavior": "Generates a return description based on return types. Single return: 'the result'. Multiple returns: 'the first return value', 'the second return value'. Return type name is included if short (e.g., 'the int result').",
+            "examples": [
+              "returnDesc(['int']) → 'the result'",
+              "returnDesc(['int', 'error']) → 'the result and an error'"
+            ]
+          },
+          "joinParams": {
+            "signature": "joinParams(params []symbol.Param) string",
+            "behavior": "Joins parameter names with ', ' and ' and ' for use in brief sentences.",
+            "examples": [
+              "joinParams([{a,int},{b,int}]) → 'a and b'",
+              "joinParams([{x,int},{y,int},{z,int}]) → 'x, y, and z'"
+            ]
+          },
+          "commentPrefix": {
+            "signature": "commentPrefix(lang string) string",
+            "behavior": "Returns the comment prefix for the language: '//' for Go, '#' for Python, '//' for Rust, ' *' for Doxygen"
+          }
+        },
+        "template_variables": {
+          "description": "Each template receives a data context with the following top-level variables, derived from SymbolInfo fields:",
+          "fields": [
+            {"name": "Name", "type": "string", "source": "SymbolInfo.Name"},
+            {"name": "Kind", "type": "string", "source": "SymbolInfo.Kind.String()"},
+            {"name": "Params", "type": "[]symbol.Param", "source": "SymbolInfo.Params"},
+            {"name": "Returns", "type": "[]string", "source": "SymbolInfo.Returns"},
+            {"name": "TypeParams", "type": "[]symbol.Param", "source": "SymbolInfo.TypeParams"},
+            {"name": "Receiver", "type": "*symbol.Param", "source": "SymbolInfo.Receiver"},
+            {"name": "HasReceiver", "type": "bool", "source": "SymbolInfo.Receiver != nil"},
+            {"name": "Brief", "type": "string", "computed": "brief(Name, Params, Returns)"},
+            {"name": "Lang", "type": "string", "computed": "language identifier passed to Render"}
+          ]
+        },
+        "error_handling": {
+          "unknown_language": "Render returns error 'unknown language: X' when lang is not in the templates map",
+          "template_error": "Render wraps template.Execute errors with context (language name, symbol name)",
+          "empty_symbol": "Render handles empty Name gracefully — returns empty string or placeholder comment",
+          "nil_receiver": "Templates check HasReceiver before accessing Receiver fields to avoid nil pointer panics"
+        },
+        "rationale": "Using Go text/template (stdlib) avoids external dependencies. The template + FuncMap pattern is the standard Go approach (same as Helm, Go's own doc generation). Separating template functions from template definitions allows both to be tested independently. The brief/paramDesc/returnDesc functions provide basic but correct descriptions — sophistication comes in Phase 5."
+      },
+      "success_criteria": [
+        "internal/template/engine.go compiles with go build ./internal/template/...",
+        "Engine.New accepts a map[string]string of template definitions and compiles them without error",
+        "Engine.Render with a valid symbol and language returns a non-empty string",
+        "Engine.Render with unknown language returns descriptive error",
+        "Engine.Render handles empty params gracefully (no panic, returns valid comment structure)",
+        "Engine.Render handles empty returns gracefully",
+        "Engine.Render handles nil receiver gracefully",
+        "All template functions (brief, paramDesc, returnDesc, joinParams, commentPrefix) produce sensible output for realistic inputs",
+        "go vet ./internal/template/ passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P2-T2",
+      "title": "Create internal/template/engine_test.go — Engine core tests",
+      "description": "Write a comprehensive test suite for the template engine. Tests cover: template compilation from raw strings, Render output correctness for each supported language, edge cases (empty params, empty returns, nil receiver, generic type params), error handling (unknown language, template syntax errors), and helper function unit tests. Tests use simple inline template definitions to avoid coupling to the full template library — the template content tests belong in P2-T4.",
+      "file": "internal/template/engine_test.go",
+      "dependencies": ["P2-T1"],
+      "specification": {
+        "package": "template",
+        "imports": [
+          "testing",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol"
+        ],
+        "test_cases": [
+          {
+            "name": "TestNewEngineCompiles",
+            "assertions": [
+              "New with a valid template map returns Engine with no error",
+              "New with a syntactically invalid template string returns error",
+              "New with nil map returns error or empty engine (document behavior)"
+            ]
+          },
+          {
+            "name": "TestRenderBasicFunction",
+            "setup": "Create Engine with a simple template: '{{.Name}} does things.', create SymbolInfo for a function 'DoSomething' with 2 params and 1 return",
+            "assertions": [
+              "Render returns non-empty string",
+              "Output contains 'DoSomething' and 'does things'",
+              "Template variables are correctly interpolated"
+            ]
+          },
+          {
+            "name": "TestRenderEmptyParams",
+            "setup": "Create SymbolInfo with Name='Foo', zero Params, zero Returns",
+            "assertions": [
+              "Render does not panic",
+              "Output does not contain param-related text",
+              "Output does not contain return-related text"
+            ]
+          },
+          {
+            "name": "TestRenderEmptyReturns",
+            "setup": "Create SymbolInfo with Name='Bar', 1 param, zero Returns",
+            "assertions": [
+              "Render does not panic",
+              "Output contains param text",
+              "Output does not contain return text"
+            ]
+          },
+          {
+            "name": "TestRenderWithReceiver",
+            "setup": "Create SymbolInfo with Kind=KindMethod, Receiver={Name:'p',Type:'*Person'}, Params=[{name,string}], Returns=['string']",
+            "assertions": [
+              "Render does not panic",
+              "Output references receiver type or name in brief context",
+              "Receiver is not counted as a parameter"
+            ]
+          },
+          {
+            "name": "TestRenderUnknownLanguage",
+            "setup": "Create Engine with only 'go' template, call Engine.Render with lang='python'",
+            "assertions": [
+              "Render returns error containing 'unknown language' or 'python'"
+            ]
+          },
+          {
+            "name": "TestBriefFunction",
+            "assertions": [
+              "brief('Add', [{a,int},{b,int}], ['int']) returns a string containing 'adds' and 'a' and 'b'",
+              "brief('greet', [{name,str},{age,int}], ['str']) returns a string containing 'greets'",
+              "brief('DoNothing', [], []) returns a string that does not mention params or returns"
+            ]
+          },
+          {
+            "name": "TestParamDescFunction",
+            "assertions": [
+              "paramDesc([{a,int}], 0) returns a non-empty string",
+              "paramDesc([], 0) returns empty string (no params to describe)"
+            ]
+          },
+          {
+            "name": "TestReturnDescFunction",
+            "assertions": [
+              "returnDesc(['int']) returns a non-empty string",
+              "returnDesc([]) returns empty string"
+            ]
+          },
+          {
+            "name": "TestJoinParams",
+            "assertions": [
+              "joinParams([{a,int}]) returns 'a'",
+              "joinParams([{a,int},{b,int}]) returns 'a and b'",
+              "joinParams([{x,int},{y,int},{z,int}]) returns 'x, y, and z'"
+            ]
+          },
+          {
+            "name": "TestRenderSpecialCharacters",
+            "setup": "Symbol name contains underscores or special characters (e.g., '__init__', 'process_data')",
+            "assertions": [
+              "Template renders without escaping or truncation issues",
+              "Special characters in names are preserved in output"
+            ]
+          },
+          {
+            "name": "TestRenderGenericTypeParams",
+            "setup": "SymbolInfo with TypeParams=[{T,any}], Name='FirstOrDefault'",
+            "assertions": [
+              "Render does not panic with TypeParams present",
+              "Output references the generic type or handles gracefully"
+            ]
+          }
+        ],
+        "test_data": "Test data (SymbolInfo instances) are constructed inline in test functions, not loaded from fixture files. This keeps engine tests fast and independent of the parser package.",
+        "rationale": "Unit tests for the engine core should be independent of the template library (P2-T4 covers integration with real templates). Inline test data keeps tests fast (~100ms) and focused on engine behavior rather than data loading. Separate files for engine_test.go vs templates_test.go maintain clear separation of concerns."
+      },
+      "success_criteria": [
+        "All test cases pass with go test ./internal/template/ -v -count=1 -run TestEngine",
+        "Tests exercise all Render error paths (unknown language, template syntax error)",
+        "Tests cover empty params, empty returns, nil receiver, and generic type params",
+        "Helper function unit tests have >90% coverage of brief/paramDesc/returnDesc/joinParams",
+        "go vet ./internal/template/ passes with zero warnings",
+        "Tests complete in < 2 seconds (no CGo dependency, pure Go)"
+      ]
+    },
+    {
+      "id": "P2-T3",
+      "title": "Create internal/template/templates.go — Per-language template definitions",
+      "description": "Define the default Go text/template strings for each supported language: GoDoc prose, Doxygen for C/C++, Google-style Python docstrings, and Rustdoc. Each template uses the variable and function contract established by the engine (Name, Brief, Params, Returns, brief(), paramDesc(), returnDesc(), commentPrefix()). Templates are exported via GetDefaultTemplates() map[string]string, which the generator uses to initialize the engine. Also provides GetTemplate(lang string) (string, bool) for single-language lookup.",
+      "file": "internal/template/templates.go",
+      "dependencies": [],
+      "specification": {
+        "package": "template",
+        "exports": {
+          "func GetDefaultTemplates() map[string]string": "Returns the default template map for all 5 languages. Keys: 'go', 'python', 'c', 'cpp', 'rust'. Each value is a Go text/template string.",
+          "func GetTemplate(lang string) (string, bool)": "Returns the default template for a single language. Returns empty string and false if language is unknown."
+        },
+        "templates": {
+          "go": {
+            "description": "GoDoc prose-style comment. Uses '//' line prefix. Brief sentence followed by blank line then per-parameter descriptions.",
+            "format_notes": [
+              "No @param or @return tags — Go convention is prose description",
+              "Blank comment line (//) separates brief from parameter descriptions",
+              "Every line starts with '// ' (Go comment prefix)",
+              "First word of Brief is lowercase (Go convention: '// FuncName does X')"
+            ],
+            "template_structure": "// {{.Name}} {{.Brief}}\n{{- if .Params}}\n//\n{{- range $i, $p := .Params}}\n// {{$p.Name}} - {{paramDesc $.Params $i}}\n{{- end}}\n{{- end}}\n{{- if .Returns}}\n//\n{{- range $i, $r := .Returns}}\n// returns {{$r}}: {{returnDesc $.Returns}}\n{{- end}}\n{{- end}}",
+            "example": "// Add adds a and b and returns the result.\n//\n// a - the first operand\n// b - the second operand"
+          },
+          "python": {
+            "description": "Google-style Python docstring with Args: and Returns: sections. Uses triple-quoted \"\"\" delimiters.",
+            "format_notes": [
+              "First line: brief description",
+              "Blank line after brief",
+              "Args: section with 'name (type): Description' per param",
+              "Returns: section with 'type: Description'",
+              "Indentation: 4 spaces inside the docstring"
+            ],
+            "template_structure": "\"\"\"{{.Brief}}\n{{- if .Params}}\n\nArgs:\n{{- range $i, $p := .Params}}\n    {{$p.Name}} ({{$p.Type}}): {{paramDesc $.Params $i}}\n{{- end}}\n{{- end}}\n{{- if .Returns}}\n\nReturns:\n{{- range $i, $r := .Returns}}\n    {{$r}}: {{returnDesc $.Returns}}\n{{- end}}\n{{- end}}\n\"\"\"",
+            "example": "\"\"\"Greet a person.\n\nArgs:\n    name (str): The name of the person.\n    age (int): The age of the person.\n\nReturns:\n    str: The greeting message.\n\"\"\""
+          },
+          "c": {
+            "description": "Doxygen/JSDoc-style block comment for C. Uses /** ... */ with * prefix on each line.",
+            "format_notes": [
+              "Opening '/**' on its own line",
+              "' * @brief' line for brief description",
+              "' * @param name Description' per parameter",
+              "' * @return Description' for return type",
+              "Closing ' */' on its own line"
+            ],
+            "template_structure": "/**\n * @brief {{.Brief}}\n{{- if .Params}}\n{{- range $i, $p := .Params}}\n * @param {{$p.Name}} {{paramDesc $.Params $i}}\n{{- end}}\n{{- end}}\n{{- if .Returns}}\n * @return {{index .Returns 0}} {{returnDesc $.Returns}}\n{{- end}}\n */",
+            "example": "/**\n * @brief Divides dividend by divisor and returns the quotient.\n * @param dividend The dividend.\n * @param divisor The divisor.\n * @return int The quotient.\n */"
+          },
+          "cpp": {
+            "description": "Doxygen-style block comment for C++. Identical structure to C template — C and C++ share the Doxygen format.",
+            "format_notes": [
+              "Same format as 'c' template — Doxygen conventions apply to both C and C++",
+              "May include class/struct brief descriptions in addition to function docs",
+              "Methods use 'this' or receiver context in brief descriptions"
+            ],
+            "template_structure": "/**\n * @brief {{.Brief}}\n{{- if .Params}}\n{{- range $i, $p := .Params}}\n * @param {{$p.Name}} {{paramDesc $.Params $i}}\n{{- end}}\n{{- end}}\n{{- if .Returns}}\n * @return {{index .Returns 0}} {{returnDesc $.Returns}}\n{{- end}}\n */",
+            "example": "/**\n * @brief Adds two integers and returns the sum.\n * @param a The first operand.\n * @param b The second operand.\n * @return int The sum.\n */"
+          },
+          "rust": {
+            "description": "Rustdoc-style with '///' prefix. Uses bullet-point parameter descriptions with backtick-quoted names.",
+            "format_notes": [
+              "First line: '/// Brief description'",
+              "Blank '///' line after brief",
+              "'/// * \\`param\\` - Description' per parameter",
+              "'/// Returns: Description' for return (or \"# Returns\" section header)",
+              "Every line starts with '/// '"
+            ],
+            "template_structure": "/// {{.Brief}}\n{{- if .Params}}\n///\n{{- range $i, $p := .Params}}\n/// * \\`{{$p.Name}}\\` - {{paramDesc $.Params $i}}\n{{- end}}\n{{- end}}\n{{- if .Returns}}\n///\n/// Returns: {{returnDesc $.Returns}}\n{{- end}}",
+            "example": "/// Adds two integers and returns the sum.\n///\n/// * \\`a\\` - the first operand\n/// * \\`b\\` - the second operand\n///\n/// Returns: the result."
+          }
+        },
+        "tag_order_configurability": {
+          "description": "Template tag order (brief first vs. param first) is configurable via the config system (P2-T5). The default templates above all use 'brief before parameters' order. The config file can select an alternate template with reversed order. Two template variants per language are predefined: 'default' (brief-first) and 'params-first'.",
+          "alternative_variant": "A 'params-first' variant reverses the order, placing @param/@arg lines before the brief/description. This is stored as a separate key (e.g., 'go-paramsfirst', 'c-paramsfirst') in the GetDefaultTemplates() map for config-based selection."
+        },
+        "rationale": "Hardcoding the five template strings rather than reading them from config files at startup keeps the binary self-contained and reduces runtime failure modes. The config system can override individual template components (brief format, param format, return format) but the base structure comes from these defaults. C and C++ share the same Doxygen structure but are separate map entries to allow future divergence."
+      },
+      "success_criteria": [
+        "internal/template/templates.go compiles with go build ./internal/template/...",
+        "GetDefaultTemplates() returns a map with exactly 5 entries: 'go', 'python', 'c', 'cpp', 'rust'",
+        "Each template string contains valid Go text/template syntax (template.Must(template.New('test').Parse(tpl)) does not panic)",
+        "Each template references {{.Name}}, {{.Brief}}, {{range .Params}} or equivalent field accesses",
+        "C and C++ templates produce valid Doxygen /** */ block comment structures",
+        "Go template produces lines prefixed with '// ' (GoDoc convention)",
+        "Python template produces '\"\"\"' delimited docstrings with 'Args:' and 'Returns:' sections",
+        "Rust template produces lines prefixed with '///'",
+        "go vet ./internal/template/ passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P2-T4",
+      "title": "Create internal/template/templates_test.go — Golden file/snapshot tests per language",
+      "description": "Write snapshot-style tests for each language's template output. Tests load SymbolInfo from the test fixtures (via the parser if available, or construct in-memory SymbolInfo), render through the Engine with default templates, and compare the output against golden files in testdata/golden/. Uses the -update flag pattern to regenerate golden files. Tests validate full comment structure including comment delimiters, indentation, and tag ordering.",
+      "file": "internal/template/templates_test.go",
+      "dependencies": ["P2-T1", "P2-T3"],
+      "specification": {
+        "package": "template",
+        "imports": [
+          "flag",
+          "os",
+          "path/filepath",
+          "testing",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol"
+        ],
+        "test_data": {
+          "inline_symbols": {
+            "description": "Test symbols constructed inline to avoid coupling tests to the parser at this stage. Each language has representative symbols matching the fixture patterns.",
+            "go": [
+              {"Name": "Add", "Kind": "KindFunction", "Params": [{"Name":"a","Type":"int"},{"Name":"b","Type":"int"}], "Returns": ["int"]},
+              {"Name": "Greet", "Kind": "KindMethod", "Params": [{"Name":"name","Type":"string"}], "Returns": ["string"], "Receiver": {"Name":"p","Type":"Person"}},
+              {"Name": "Person", "Kind": "KindStruct", "Params": [], "Returns": []},
+              {"Name": "FirstOrDefault", "Kind": "KindFunction", "Params": [{"Name":"items","Type":"[]T"},{"Name":"defaultVal","Type":"T"}], "Returns": ["T"], "TypeParams": [{"Name":"T","Type":"any"}]}
+            ],
+            "python": [
+              {"Name": "greet", "Kind": "KindFunction", "Params": [{"Name":"name","Type":"str"},{"Name":"age","Type":"int"}], "Returns": ["str"]},
+              {"Name": "add", "Kind": "KindMethod", "Params": [{"Name":"a","Type":"int"},{"Name":"b","Type":"int"}], "Returns": ["int"], "Receiver": {"Name":"self","Type":"Calculator"}},
+              {"Name": "Calculator", "Kind": "KindClass", "Params": [], "Returns": []}
+            ],
+            "c": [
+              {"Name": "add", "Kind": "KindFunction", "Params": [{"Name":"a","Type":"int"},{"Name":"b","Type":"int"}], "Returns": ["int"]},
+              {"Name": "process_buffer", "Kind": "KindFunction", "Params": [{"Name":"buffer","Type":"char *"},{"Name":"size","Type":"int"}], "Returns": ["void"]},
+              {"Name": "divide", "Kind": "KindFunction", "Params": [{"Name":"dividend","Type":"int"},{"Name":"divisor","Type":"int"}], "Returns": ["int"]}
+            ],
+            "cpp": [
+              {"Name": "free_function", "Kind": "KindFunction", "Params": [{"Name":"x","Type":"int"},{"Name":"y","Type":"int"}], "Returns": ["int"]},
+              {"Name": "Calculator", "Kind": "KindClass", "Params": [], "Returns": []}
+            ],
+            "rust": [
+              {"Name": "add", "Kind": "KindFunction", "Params": [{"Name":"a","Type":"i32"},{"Name":"b","Type":"i32"}], "Returns": ["i32"]},
+              {"Name": "new", "Kind": "KindMethod", "Params": [{"Name":"x","Type":"i32"},{"Name":"y","Type":"i32"}], "Returns": ["Self"], "Receiver": {"Name":"self","Type":"&Point"}},
+              {"Name": "Point", "Kind": "KindStruct", "Params": [], "Returns": []}
+            ]
+          }
+        },
+        "test_methodology": {
+          "pattern": "Golden file snapshot testing with -update flag",
+          "test_flow": [
+            "For each language, load test symbols from inline data",
+            "Create Engine with GetDefaultTemplates()",
+            "Render each symbol through the engine for its language",
+            "Join multiple symbol outputs per language into a single expected block",
+            "Compare against testdata/golden/{lang}_expected.txt",
+            "If -update flag is passed and UPDATE_GOLDEN=true, write new golden files"
+          ],
+          "update_flag": "var update = flag.Bool('update', false, 'update golden files')",
+          "golden_path": "testdata/golden/",
+          "file_suffix": "{lang}_expected.txt"
+        },
+        "test_cases": [
+          {
+            "name": "TestGoDocGolden",
+            "assertions": [
+              "Go Add function output starts with '// Add'",
+              "Go Add function output contains 'a -' and 'b -' param lines",
+              "Go output has exactly // prefix on every non-empty line",
+              "Golden file content matches rendered output"
+            ]
+          },
+          {
+            "name": "TestPythonDocGolden",
+            "assertions": [
+              "Python docstring starts with '\"\"\"' and ends with '\"\"\"'",
+              "Python docstring contains 'Args:' section",
+              "Python docstring contains 'Returns:' section when function has return type",
+              "Parameter lines are indented with 4 spaces",
+              "Golden file content matches rendered output"
+            ]
+          },
+          {
+            "name": "TestCDoxygenGolden",
+            "assertions": [
+              "C output starts with '/**' and ends with ' */'",
+              "C output contains '@brief' line",
+              "C output contains '@param' for each parameter",
+              "C output contains '@return' when return type is non-void",
+              "Golden file content matches rendered output"
+            ]
+          },
+          {
+            "name": "TestCppDoxygenGolden",
+            "assertions": [
+              "C++ output for functions matches same Doxygen conventions as C",
+              "C++ class output produces suitable class/structure comment",
+              "Golden file content matches rendered output"
+            ]
+          },
+          {
+            "name": "TestRustdocGolden",
+            "assertions": [
+              "Rust output starts with '///' prefix on every line",
+              "Rust output contains '* \\`param\\` -' bullet lines",
+              "Rust output contains 'Returns:' section when function has return type",
+              "Golden file content matches rendered output"
+            ]
+          },
+          {
+            "name": "TestAllLanguagesCovered",
+            "assertions": [
+              "Golden files exist for all 5 languages",
+              "Each golden file contains non-empty content",
+              "Number of golden files matches number of languages"
+            ]
+          }
+        ],
+        "golden_file_management": {
+          "create_if_missing": "If golden file does not exist and -update is not set, test fails with message showing expected content and instructions to run with -update",
+          "overwrite": "If -update is set, golden files are overwritten with current output",
+          "diff_display": "On mismatch, test displays unified diff between golden file and actual output",
+          "cleanup": "Test does not leave temporary files — output is compared in-memory against golden file content"
+        },
+        "rationale": "Golden file snapshot testing is the standard approach for template verification. The -update flag allows regenerating goldens when templates intentionally change. Testing with inline symbols (rather than loading from parser) isolates template correctness from parser correctness — a template test failure indicates a template problem, not a parser problem. Each language gets separate test functions for clear failure reporting."
+      },
+      "success_criteria": [
+        "All golden file tests pass with go test ./internal/template/ -v -count=1 -run TestTemplate",
+        "Golden files exist at testdata/golden/{go,python,c,cpp,rust}_expected.txt",
+        "Each golden file contains correctly formatted output for that language's convention",
+        "Tests pass both with existing goldens and after -update regeneration",
+        "Test output includes meaningful diff on mismatch (not just 'expected X got Y')",
+        "Go vet passes with zero warnings",
+        "Go template output from golden tests is syntactically valid: Go output parses as valid comment text, Python output parses as valid Python syntax"
+      ]
+    },
+    {
+      "id": "P2-T5",
+      "title": "Create internal/config/config.go — Config file loader for .deoxy.yaml",
+      "description": "Build the configuration system that loads a .deoxy.yaml file to customize doc comment generation per language. Supports: docstyle selection per language (GoDoc prose, Doxygen, Google-style, Rustdoc), tag ordering (brief-first vs params-first), custom tag injection, and override templates for brief/param/return components. Uses gopkg.in/yaml.v3 for YAML parsing. When no config file is found, uses sensible defaults matching the template library defaults. This is the first version of the config system — Phase 5 will add smart text toggles and custom tag registrations.",
+      "file": "internal/config/config.go",
+      "dependencies": [],
+      "specification": {
+        "package": "config",
+        "imports": [
+          "fmt",
+          "os",
+          "gopkg.in/yaml.v3"
+        ],
+        "types": {
+          "DocStyle": {
+            "description": "Enum for selecting the documentation comment style for a language.",
+            "values": [
+              "DocStyleGoDoc = iota — Prose-style GoDoc (// FuncName does X)",
+              "DocStyleDoxygen — Doxygen/JSDoc-style (/** @brief ... */)",
+              "DocStylePyDoc — Google-style Python docstrings (\"\"\"... Args: ... Returns: ...\"\"\")",
+              "DocStyleRustdoc — Rust-style /// doc comments"
+            ],
+            "method": "func (d DocStyle) String() string"
+          },
+          "TagOrder": {
+            "description": "Controls the order of sections in generated doc comments.",
+            "values": [
+              "TagOrderBriefFirst = iota — Brief description before parameter/return tags (default)",
+              "TagOrderParamsFirst — Parameter tags before brief description"
+            ]
+          },
+          "LanguageConfig": {
+            "description": "Per-language configuration overrides.",
+            "fields": [
+              {"name": "DocStyle", "type": "string", "comment": "Overrides the default docstyle for this language. Valid: 'godoc', 'doxygen', 'pydoc', 'rustdoc'"},
+              {"name": "TagOrder", "type": "string", "comment": "Overrides tag order. Valid: 'brief-first', 'params-first'"},
+              {"name": "BriefTemplate", "type": "string", "comment": "Custom Go text/template for the brief/description line. Overrides the default per-language brief template component."},
+              {"name": "ParamTemplate", "type": "string", "comment": "Custom template for individual parameter doc lines."},
+              {"name": "ReturnTemplate", "type": "string", "comment": "Custom template for return value doc lines."},
+              {"name": "CustomTags", "type": "[]string", "comment": "Additional tags to inject (e.g., '@note', '@example'). Injected after standard tags in declaration order."}
+            ]
+          },
+          "Config": {
+            "description": "Top-level deoxy configuration.",
+            "fields": [
+              {"name": "Version", "type": "string", "yaml": "version", "comment": "Config file version for forward compatibility"},
+              {"name": "Languages", "type": "map[string]LanguageConfig", "yaml": "languages", "comment": "Per-language configuration overrides. Key is language name ('go', 'python', 'c', 'cpp', 'rust')"},
+              {"name": "DefaultDocStyle", "type": "string", "yaml": "default_style", "comment": "Default docstyle for languages without explicit config. Valid: 'godoc', 'doxygen', 'pydoc', 'rustdoc'"},
+              {"name": "DefaultTagOrder", "type": "string", "yaml": "default_tag_order", "comment": "Default tag ordering: 'brief-first' or 'params-first'"}
+            ]
+          }
+        },
+        "exports": {
+          "func LoadConfig(path string) (*Config, error)": "Loads and parses a .deoxy.yaml file from the given path. Returns Config and nil error on success. Returns error if file does not exist, YAML is invalid, or validation fails.",
+          "func LoadDefaultConfig() *Config": "Returns a Config with all default values — essentially what would be used if no .deoxy.yaml exists. DefaultDocStyle is 'godoc', DefaultTagOrder is 'brief-first'.",
+          "func (c *Config) GetLanguageConfig(lang string) LanguageConfig": "Returns the effective config for a language, merging per-language overrides onto the defaults. Returns the default config if no per-language override exists.",
+          "func (c *Config) GetDocStyle(lang string) DocStyle": "Returns the parsed DocStyle enum for a language, considering defaults and per-language overrides."
+        },
+        "yaml_schema": {
+          "description": "The expected .deoxy.yaml format",
+          "example": "version: '1'\ndefault_style: godoc\ndefault_tag_order: brief-first\nlanguages:\n  go:\n    docstyle: godoc\n    tag_order: brief-first\n  c:\n    docstyle: doxygen\n    tag_order: params-first\n  cpp:\n    docstyle: doxygen\n    custom_tags:\n      - note\n      - warning\n  python:\n    docstyle: pydoc\n  rust:\n    docstyle: rustdoc"
+        },
+        "validation_rules": [
+          "DocStyle string values must be one of: 'godoc', 'doxygen', 'pydoc', 'rustdoc'",
+          "TagOrder string values must be one of: 'brief-first', 'params-first'",
+          "Unknown top-level keys in YAML produce a warning but do not cause a hard error (forward compatibility)",
+          "Unknown language keys in per-language config produce a warning (typo detection)",
+          "Version field is informational only; no version-specific behavior yet"
+        ],
+        "default_config": {
+          "Version": "",
+          "DefaultDocStyle": "godoc",
+          "DefaultTagOrder": "brief-first",
+          "Languages": {
+            "go": {"DocStyle": "godoc", "TagOrder": "brief-first"},
+            "python": {"DocStyle": "pydoc", "TagOrder": "brief-first"},
+            "c": {"DocStyle": "doxygen", "TagOrder": "brief-first"},
+            "cpp": {"DocStyle": "doxygen", "TagOrder": "brief-first"},
+            "rust": {"DocStyle": "rustdoc", "TagOrder": "brief-first"}
+          }
+        },
+        "dependency": "gopkg.in/yaml.v3 — a well-established Go YAML library (3.6k+ GitHub stars, 0 indirect deps). Added via 'go get gopkg.in/yaml.v3'. This is the only new external dependency for Phase 2 — the template engine itself uses only stdlib text/template.",
+        "rationale": "YAML is the standard for Go CLI tool config files (e.g., goreleaser, golangci-lint). yaml.v3 is the de facto standard Go YAML parser with zero dependencies. The Config struct is designed for forward compatibility: unknown YAML keys produce warnings instead of errors. The GetLanguageConfig() merge pattern allows minimal config files where only one or two languages need overrides. Per-language template overrides (BriefTemplate, ParamTemplate, ReturnTemplate) enable advanced users to customize output without recompiling."
+      },
+      "success_criteria": [
+        "internal/config/config.go compiles with go build ./internal/config/...",
+        "go get gopkg.in/yaml.v3 succeeds without dependency conflicts",
+        "LoadDefaultConfig() returns Config with Go defaulting to godoc style, C/C++ to doxygen, Python to pydoc, Rust to rustdoc",
+        "LoadConfig on a valid .deoxy.yaml returns correctly populated Config",
+        "LoadConfig on a non-existent file returns error",
+        "LoadConfig on an invalid YAML file returns error",
+        "GetLanguageConfig('go') returns merged config: default DocStyle=godoc unless overridden",
+        "GetDocStyle('c') returns DocStyleDoxygen from defaults",
+        "go vet ./internal/config/ passes with zero warnings",
+        "Multiple config fields round-trip correctly through YAML marshaling/unmarshaling"
+      ]
+    },
+    {
+      "id": "P2-T6",
+      "title": "Create internal/config/config_test.go — Config loading and validation tests",
+      "description": "Write the test suite for the config package. Tests cover: loading valid .deoxy.yaml files, missing file handling, YAML parse errors, per-language override merging, docstyle string-to-enum mapping, tag order parsing, unknown key warnings, and default config correctness. Uses temporary YAML files written in test setup for isolation.",
+      "file": "internal/config/config_test.go",
+      "dependencies": ["P2-T5"],
+      "specification": {
+        "package": "config",
+        "imports": [
+          "os",
+          "path/filepath",
+          "testing"
+        ],
+        "test_cases": [
+          {
+            "name": "TestLoadValidConfig",
+            "setup": "Write a temporary .deoxy.yaml with go=godoc, c=doxygen, python=pydoc, rust=rustdoc",
+            "assertions": [
+              "LoadConfig returns Config with no error",
+              "Config has correct docstyle for each language",
+              "Config fields match the YAML input"
+            ]
+          },
+          {
+            "name": "TestLoadDefaultConfig",
+            "setup": "Call LoadDefaultConfig()",
+            "assertions": [
+              "DefaultConfig is not nil",
+              "DefaultDocStyle is 'godoc'",
+              "DefaultTagOrder is 'brief-first'",
+              "All 5 languages have entries in Languages map"
+            ]
+          },
+          {
+            "name": "TestLoadConfigFileNotFound",
+            "setup": "Call LoadConfig('/nonexistent/.deoxy.yaml')",
+            "assertions": [
+              "Error is returned",
+              "Error message mentions file not found or no such file"
+            ]
+          },
+          {
+            "name": "TestLoadConfigInvalidYAML",
+            "setup": "Write a temporary file with invalid YAML content",
+            "assertions": [
+              "LoadConfig returns error",
+              "Error message mentions YAML parsing failure"
+            ]
+          },
+          {
+            "name": "TestGetLanguageConfigMerge",
+            "setup": "Create Config with DefaultDocStyle='godoc', with per-language override for 'c' to 'doxygen'",
+            "assertions": [
+              "GetLanguageConfig('go') returns DocStyle='godoc' (from defaults)",
+              "GetLanguageConfig('c') returns DocStyle='doxygen' (from override)",
+              "Go config does not inherit C's override"
+            ]
+          },
+          {
+            "name": "TestGetDocStyleParsing",
+            "setup": "Create Config with various docstyle strings",
+            "assertions": [
+              "GetDocStyle for 'godoc' returns DocStyleGoDoc",
+              "GetDocStyle for 'doxygen' returns DocStyleDoxygen",
+              "GetDocStyle for 'pydoc' returns DocStylePyDoc",
+              "GetDocStyle for 'rustdoc' returns DocStyleRustdoc",
+              "GetDocStyle for invalid string returns default with an error or warning"
+            ]
+          },
+          {
+            "name": "TestUnknownKeyTolerance",
+            "setup": "Write a .deoxy.yaml with an unknown top-level key 'experimental_feature: true'",
+            "assertions": [
+              "Config loads without error (forward compat)",
+              "Unknown key either is ignored or produces a non-fatal warning",
+              "Known fields are still populated correctly"
+            ]
+          },
+          {
+            "name": "TestConfigRoundTrip",
+            "setup": "Create Config, marshal to YAML, unmarshal back",
+            "assertions": [
+              "Round-tripped Config equals original",
+              "No data loss during marshal/unmarshal"
+            ]
+          },
+          {
+            "name": "TestEmptyConfigFile",
+            "setup": "Write an empty .deoxy.yaml (just '{}')",
+            "assertions": [
+              "Config loads without error",
+              "All values use defaults (DefaultDocStyle=godoc, etc.)"
+            ]
+          },
+          {
+            "name": "TestPerLanguageTemplateOverrides",
+            "setup": "Write config with go.BriefTemplate='Custom: {{.Name}}', go.ParamTemplate='- {{.Name}}'",
+            "assertions": [
+              "Config loads without error",
+              "Go LanguageConfig has BriefTemplate = 'Custom: {{.Name}}'",
+              "Go LanguageConfig has ParamTemplate = '- {{.Name}}'",
+              "Other languages have empty template overrides"
+            ]
+          },
+          {
+            "name": "TestCustomTags",
+            "setup": "Write config with cpp.CustomTags=['note', 'warning']",
+            "assertions": [
+              "Config loads without error",
+              "C++ LanguageConfig has CustomTags with ['note', 'warning']",
+              "Other languages have nil/empty CustomTags"
+            ]
+          }
+        ],
+        "rationale": "Config tests are pure Go + filesystem operations with no CGo dependency. Tests use temporary files in t.TempDir() for isolation and automatic cleanup. The round-trip test validates that marshaling and unmarshaling preserves all fields. The load-from-non-existent-file test validates graceful degradation."
+      },
+      "success_criteria": [
+        "All config tests pass with go test ./internal/config/ -v -count=1",
+        "Tests cover: valid config, invalid YAML, missing file, per-language overrides, defaults, custom tags, template overrides",
+        "Test coverage > 85% for config.go (statements)",
+        "Tests complete in < 1 second (no CGo, no network)",
+        "go vet passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P2-T7",
+      "title": "Create internal/generator/generator.go — Pipeline orchestrator (config → scan → parse → render)",
+      "description": "Build the Generator — the top-level orchestrator that wires together the full deoxy pipeline: load config, scan directories for source files, parse files with tree-sitter, render doc comments via the template engine, and return the results. This package replaces the existing doc.go placeholder with a working Generator struct. The Generator does NOT write to files (Phase 3), but returns structured results that Phase 3's CLI commands can use for file injection. The pipeline is: Generator.Run(paths) → parse each file → group symbols by file → render comments → return map of file → GeneratedFileResult.",
+      "file": "internal/generator/generator.go",
+      "dependencies": ["P2-T1", "P2-T3", "P2-T5"],
+      "specification": {
+        "package": "generator",
+        "imports": [
+          "fmt",
+          "os",
+          "sort",
+          "sync",
+          "github.com/superduperpiyuxh/deoxy/internal/config",
+          "github.com/superduperpiyuxh/deoxy/internal/parser",
+          "github.com/superduperpiyuxh/deoxy/internal/scanner",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol",
+          "github.com/superduperpiyuxh/deoxy/internal/template"
+        ],
+        "types": {
+          "SymbolComment": {
+            "description": "A single generated doc comment for a symbol at a specific source location.",
+            "fields": [
+              {"name": "Symbol", "type": "symbol.SymbolInfo", "comment": "The parsed symbol this comment was generated for"},
+              {"name": "DocComment", "type": "string", "comment": "The generated doc comment text, including comment delimiters"},
+              {"name": "StartLine", "type": "int", "comment": "0-indexed line where this comment should be inserted (before the symbol)"},
+              {"name": "EndLine", "type": "int", "comment": "0-indexed line where the symbol ends"}
+            ]
+          },
+          "GeneratedFileResult": {
+            "description": "Results for a single source file.",
+            "fields": [
+              {"name": "Path", "type": "string", "comment": "Absolute file path"},
+              {"name": "Language", "type": "string", "comment": "Language identifier"},
+              {"name": "Source", "type": "[]byte", "comment": "Original source bytes (for Phase 3 injection)"},
+              {"name": "Comments", "type": "[]SymbolComment", "comment": "Generated comments per symbol, in source order"},
+              {"name": "ParseError", "type": "error", "comment": "Non-nil if parsing failed for this file"}
+            ]
+          },
+          "GeneratorResult": {
+            "description": "Complete pipeline results.",
+            "fields": [
+              {"name": "Files", "type": "[]GeneratedFileResult", "comment": "Results per file"},
+              {"name": "FileCount", "type": "int", "comment": "Total files processed"},
+              {"name": "SymbolCount", "type": "int", "comment": "Total symbols documented"},
+              {"name": "ErrorCount", "type": "int", "comment": "Files with errors"}
+            ]
+          },
+          "Generator": {
+            "description": "Top-level orchestrator for the deoxy pipeline.",
+            "fields": [
+              {"name": "config", "type": "*config.Config", "comment": "Configuration for docstyle, tag order, overrides"},
+              {"name": "parser", "type": "*parser.Manager", "comment": "Shared tree-sitter parser manager (reused across files)"},
+              {"name": "engine", "type": "*template.Engine", "comment": "Template engine with compiled templates"}
+            ],
+            "methods": [
+              "func New(cfg *config.Config) (*Generator, error) — creates Generator with config, initializes parser manager and template engine with default templates",
+              "func (g *Generator) Run(paths []string) (*GeneratorResult, error) — full pipeline: scan → parse → render. Returns structured results without modifying files.",
+              "func (g *Generator) Close() error — closes the parser manager, releasing CGo resources"
+            ]
+          }
+        },
+        "pipeline_steps": {
+          "step_1_scan": {
+            "detail": "Call scanner.Scan(paths...) to discover all supported source files",
+            "error_handling": "If scan returns error, wrap with context and return immediately"
+          },
+          "step_2_parse_render": {
+            "detail": "For each file group (by language), parse source through parser.Manager, run RunQuery to extract SymbolInfo, then render each symbol through template.Engine. Files can be processed in parallel since each file produces an independent Tree.",
+            "error_handling": "Per-file parse errors are captured in GeneratedFileResult.ParseError — they do not abort processing of other files. A file with only parse errors still appears in results with ParseError set.",
+            "concurrency": "Use a worker pool pattern (one per CPU) or process files sequentially with progress logging. Sequential is simpler and safer for initial implementation — parallel can be added in Phase 3."
+          },
+          "step_3_collect": {
+            "detail": "Aggregate results into GeneratorResult with summary counts",
+            "sorting": "Files are sorted by path for deterministic output"
+          }
+        },
+        "config_integration": {
+          "description": "Generator uses the config to determine which template to use per language:",
+          "mapping": "Config docstyle → template selection: 'godoc' → go template, 'doxygen' → c/cpp template, 'pydoc' → python template, 'rustdoc' → rust template. Config TagOrder selects between 'brief-first' and 'params-first' template variants.",
+          "override_templates": "If LanguageConfig has BriefTemplate/ParamTemplate/ReturnTemplate set, the generator constructs a custom template string merging overrides with the default template structure."
+        },
+        "output_format": "Generator.Run returns *GeneratorResult with all information needed by Phase 3's CLI commands (generate, diff, dry-run). File injection is NOT done here — the generator only produces in-memory results.",
+        "implementation_notes": [
+          "Generator.New creates parser.Manager and closes it in Generator.Close (io.Closer pattern from Phase 1)",
+          "Generator.New creates template.Engine with GetDefaultTemplates() then applies config overrides",
+          "Each file's source bytes are read once and passed to both parser.Parse and stored in GeneratedFileResult.Source for Phase 3 writer",
+          "SymbolComment.StartLine uses SymbolInfo.StartLine (0-indexed from tree-sitter) — the writer in Phase 3 will insert the comment before this line",
+          "Panic recovery: Parse errors must not trigger panics — all errors are captured in result structs"
+        ],
+        "rationale": "The generator is the central pipeline that Phase 3 CLI commands will call. It is intentionally a library component (not a CLI command) to maintain separation of concerns. The io.Closer interface on Generator ensures the parser pool is properly cleaned up. Returning structured results (rather than writing files) allows Phase 3 to implement diff/dry-run modes trivially."
+      },
+      "success_criteria": [
+        "internal/generator/generator.go compiles with go build ./internal/generator/...",
+        "Generator.New creates a generator with parser manager and template engine without error",
+        "Generator.Run on an existing source file returns non-nil result with at least 1 file and 1 symbol",
+        "Generator.Run on a non-existent directory returns error",
+        "Generator.Run processes files in all 5 languages when given the testdata/fixtures/ directory",
+        "Generator.Run error count equals the number of files that failed to parse",
+        "Each GeneratedFileResult has non-empty Comments for functions/methods that have params or returns",
+        "Generator.Close() releases all parser resources without error",
+        "Go vet passes with zero warnings",
+        "GeneratorResult.SymbolCount matches the expected count from known test fixtures"
+      ]
+    },
+    {
+      "id": "P2-T8",
+      "title": "Create internal/generator/generator_test.go — End-to-end pipeline tests",
+      "description": "Write integration tests for the full generator pipeline: scan real fixture files, parse through tree-sitter, render through templates, and verify generated doc comments meet expected format per language. These are true end-to-end tests that depend on CGo and tree-sitter grammars, unlike the isolated unit tests in P2-T2 and P2-T4. Each language gets a subtest that validates comment format, delimiters, parameter documentation, and return documentation.",
+      "file": "internal/generator/generator_test.go",
+      "dependencies": ["P2-T7"],
+      "specification": {
+        "package": "generator",
+        "imports": [
+          "os",
+          "path/filepath",
+          "strings",
+          "testing",
+          "github.com/superduperpiyuxh/deoxy/internal/config"
+        ],
+        "test_cases": [
+          {
+            "name": "TestGenerateGoDoc",
+            "fixture_root": "../../testdata/fixtures/go/",
+            "setup": "Create Generator with default config (go → godoc style), run on Go fixture files",
+            "assertions": [
+              "At least 1 GeneratedFileResult with Language='go' and non-empty Comments",
+              "All comment lines for Go functions start with '// ' (Go comment prefix)",
+              "Parameter descriptions appear as '// paramName - description' pattern",
+              "Struct Person generates a struct-level comment (not param-based)",
+              "Method Greet generates a method-level comment mentioning receiver context",
+              "The Add function comment starts with '// Add' (function name + prose)"
+            ]
+          },
+          {
+            "name": "TestGeneratePythonDoc",
+            "fixture_root": "../../testdata/fixtures/python/",
+            "setup": "Create Generator with default config (python → pydoc style), run on Python fixture",
+            "assertions": [
+              "At least 1 GeneratedFileResult with Language='python' and non-empty Comments",
+              "Docstrings are delimited by '\"\"\"' (opening and closing)",
+              "Arg descriptions follow 'name (type): Description' format",
+              "Returns section exists when function has return type annotation",
+              "Class Calculator comment describes the class (no param/return sections)"
+            ]
+          },
+          {
+            "name": "TestGenerateCDoxygen",
+            "fixture_root": "../../testdata/fixtures/c/",
+            "setup": "Create Generator with default config (c → doxygen style), run on C fixture",
+            "assertions": [
+              "At least 1 GeneratedFileResult with Language='c' and non-empty Comments",
+              "Comment block starts with '/**' on its own line",
+              "Comment block ends with ' */' on its own line",
+              "Every intermediate line starts with ' * '",
+              "'@brief' tag is present",
+              "'@param' tags exist for each function parameter",
+              "'@return' tag exists for non-void functions",
+              "Void functions do NOT have @return tag"
+            ]
+          },
+          {
+            "name": "TestGenerateCppDoxygen",
+            "fixture_root": "../../testdata/fixtures/cpp/",
+            "setup": "Create Generator with default config (cpp → doxygen style), run on C++ fixture",
+            "assertions": [
+              "At least 1 GeneratedFileResult with Language='cpp' and non-empty Comments",
+              "C++ function comments follow same Doxygen structure as C",
+              "Class Calculator gets a class-level comment"
+            ]
+          },
+          {
+            "name": "TestGenerateRustdoc",
+            "fixture_root": "../../testdata/fixtures/rust/",
+            "setup": "Create Generator with default config (rust → rustdoc style), run on Rust fixture",
+            "assertions": [
+              "At least 1 GeneratedFileResult with Language='rust' and non-empty Comments",
+              "All comment lines start with '/// ' (Rustdoc prefix)",
+              "Parameter bullets follow '* \\`param\\` - description' pattern",
+              "Return section exists for functions with return type",
+              "Struct Point gets a struct-level comment"
+            ]
+          },
+          {
+            "name": "TestGenerateAllLanguages",
+            "fixture_root": "../../testdata/fixtures/",
+            "setup": "Create Generator with default config, scan entire fixtures directory (all 5 languages)",
+            "assertions": [
+              "Results contain files from all 5 languages",
+              "Total FileCount matches expected number of fixture files (at least 5)",
+              "Total SymbolCount > 0 and matches known minimum from fixtures",
+              "No file has ParseError set (all fixture files are valid syntax)"
+            ]
+          },
+          {
+            "name": "TestGenerateWithConfigOverrides",
+            "setup": "Create a Config with Go set to Doxygen style (docstyle=doxygen), run on Go fixture",
+            "assertions": [
+              "Go output now uses Doxygen /** */ format instead of // GoDoc format",
+              "Comment starts with '/**' and uses @brief, @param, @return",
+              "Parameter documentation uses @param tags",
+              "This validates the config → template mapping works end-to-end"
+            ]
+          },
+          {
+            "name": "TestGenerateEmptyFileGraceful",
+            "setup": "Create a temporary empty .go file, run Generator on it",
+            "assertions": [
+              "Result contains 1 file entry",
+              "Comments slice is empty (no symbols to document)",
+              "ParseError is nil"
+            ]
+          }
+        ],
+        "test_environment": {
+          "cgo_required": "These tests require CGO_ENABLED=1 and tree-sitter C libraries. They should be skipped if CGo is unavailable.",
+          "fixture_dependency": "Tests depend on testdata/fixtures/ from Phase 1 — if fixtures are missing, tests should skip with a clear message.",
+          "timeout": "Each language subtest should complete within 5 seconds. Full suite < 30 seconds.",
+          "skip_short": "These end-to-end tests can honor the -short flag — if -short is set, run only one language (Go) as a smoke test."
+        },
+        "rationale": "End-to-end tests are the real gate for Phase 2 completion. They validate that the full pipeline works end-to-end with real source files and real tree-sitter parsing. The config override test (Go → Doxygen) validates that the config system effectively controls template selection. The skip_short pattern allows fast smoke tests during development while running the full suite before merge."
+      },
+      "success_criteria": [
+        "All generator tests pass with CGO_ENABLED=1 go test ./internal/generator/ -v -count=1",
+        "Go fixture: all function symbols generate GoDoc-style // comments with brief + param descriptions",
+        "Python fixture: greet function generates '\"\"\"... Args: ... Returns: ...\"\"\"' Google-style docstring",
+        "C fixture: functions generate '/** @brief ... @param ... @return ... */' Doxygen format",
+        "C++ fixture: functions generate Doxygen format, classes get class-level comments",
+        "Rust fixture: functions generate '///' comments with bullet-pointed params",
+        "Config override test proves Go can generate Doxygen-style comments when configured",
+        "All-languages test processes all 5 fixture directories without error",
+        "go vet passes with zero warnings",
+        "End-to-end test validates all 6 roadmap success criteria are met"
+      ]
+    }
+  ],
+  "execution_order": [
+    {
+      "wave": 1,
+      "tasks": ["P2-T1", "P2-T5"],
+      "rationale": "P2-T1 (engine.go) and P2-T5 (config.go) have zero file overlap and no code dependency between them — they target different packages (template vs config) with different imports. Engine uses stdlib text/template; Config introduces yaml.v3. Both can be built and tested in parallel. P2-T3 (templates.go) is intentionally assigned here despite being a 'template' file because it is pure constant definitions with zero imports (only text/template strings, no Go logic) — it can be created in parallel with engine.go since they share package but the template strings are compile-time constants that engine.go imports at runtime. However, to avoid confusion, placing P2-T3 in Wave 1 as well is fine since template strings are data not code. P2-T5 introduces the yaml.v3 dependency via 'go get' — this is the only new dependency for Phase 2."
+    },
+    {
+      "wave": 2,
+      "tasks": ["P2-T2", "P2-T3"],
+      "rationale": "P2-T3 (templates.go) defines the per-language template strings — must exist before engine_test.go can test with real templates. P2-T2 (engine_test.go) tests the engine but uses simple inline templates, so it does not strictly depend on P2-T3. However, assigning both to Wave 2 allows Wave 1 to focus on the two core implementations. P2-T3 is placed here rather than Wave 1 because the template strings reference the brief/paramDesc/returnDesc function contracts defined in P2-T1 — while they are just strings that compile independently, logically they depend on the function specification. P2-T2 and P2-T3 have no file overlap (engine_test.go vs templates.go) and can be created in parallel."
+    },
+    {
+      "wave": 3,
+      "tasks": ["P2-T4", "P2-T6"],
+      "rationale": "P2-T4 (templates_test.go) golden file tests depend on both engine (P2-T1) and templates (P2-T3) being available. P2-T6 (config_test.go) depends on config.go (P2-T5). These two test files target completely different packages (template vs config) and can be written in parallel."
+    },
+    {
+      "wave": 4,
+      "tasks": ["P2-T7", "P2-T8"],
+      "rationale": "P2-T7 (generator.go) depends on all four prior packages: config (P2-T5), template engine (P2-T1), template definitions (P2-T3), and the parser/scanner/symbol packages from Phase 1. P2-T8 (generator_test.go) depends on P2-T7. These must be the last tasks because the generator wires everything together. P2-T7 and P2-T8 share the generator package and should be done sequentially (P2-T7 first, then P2-T8), but they are grouped in the same wave for dependency ordering — within-wave sequencing handles the impl → test order."
+    }
+  ],
+  "verification": [
+    {"step": "go get gopkg.in/yaml.v3", "expected": "exit code 0, new dependency added to go.mod"},
+    {"step": "go mod tidy", "expected": "exit code 0, go.sum updated"},
+    {"step": "go build ./internal/template/...", "expected": "exit code 0, template package compiles with stdlib only"},
+    {"step": "go build ./internal/config/...", "expected": "exit code 0, config package compiles with yaml.v3"},
+    {"step": "go build ./internal/generator/...", "expected": "exit code 0, generator package compiles with all dependencies"},
+    {"step": "go build ./...", "expected": "exit code 0, entire project compiles with CGO_ENABLED=1"},
+    {"step": "go vet ./...", "expected": "exit code 0, zero vet warnings across all packages"},
+    {"step": "go test ./internal/template/... -v -count=1", "expected": "exit code 0, all engine and template tests pass"},
+    {"step": "go test ./internal/config/... -v -count=1", "expected": "exit code 0, all config tests pass"},
+    {"step": "go test ./internal/generator/... -v -count=1", "expected": "exit code 0, all generator tests pass (requires CGO_ENABLED=1)"},
+    {"step": "go test ./... -count=1 -short", "expected": "exit code 0, full project test suite (short mode) passes"},
+    {"step": "Golden file verification: Go Add function output", "expected": "// Add adds a and b and returns the result.\n//\n// a - the first operand\n// b - the second operand"},
+    {"step": "Golden file verification: Python greet function output", "expected": "Contains '\"\"\"' delimiters, 'Args:' with name (str) and age (int), 'Returns:' with str"},
+    {"step": "Golden file verification: C divide function output", "expected": "/** ... @brief ... @param dividend ... @param divisor ... @return int ... */"},
+    {"step": "Config override verification", "expected": "Setting go docstyle to doxygen in config produces '/*' instead of '//' prefix"},
+    {"step": "Manual: go test -update on template package", "expected": "Golden files are regenerated; re-running tests without -update passes"}
+  ],
+  "completion_state": {
+    "go_build_passes": true,
+    "go_vet_passes": true,
+    "go_test_passes": true,
+    "template_engine_creates_and_renders": true,
+    "godoc_templates_produce_go_comments": true,
+    "pydoc_templates_produce_google_style_docstrings": true,
+    "doxygen_templates_produce_c_cpp_comments": true,
+    "rustdoc_templates_produce_rust_comments": true,
+    "template_tag_order_configurable": true,
+    "go_defaults_to_prose_not_doxygen_tags": true,
+    "go_configurable_to_doxygen_via_config": true,
+    "config_file_sets_per_language_docstyle": true,
+    "config_loading_handles_missing_file": true,
+    "generator_runs_full_pipeline": true,
+    "generator_processes_all_5_languages": true,
+    "golden_file_tests_pass": true,
+    "no_source_files_modified": true,
+    "no_cli_commands_implemented": true,
+    "no_vs_code_extension_work": true,
+    "no_ai_integration": true,
+    "no_smart_text_inference": true
+  }
+}
