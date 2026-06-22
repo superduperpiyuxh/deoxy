@@ -1,11 +1,11 @@
 package main
 
-import "fmt"
+import "github.com/superduperpiyuxh/deoxy/cmd/deoxy/cmd"
 
 // version is the current release version of deoxy.
 // Overridden at build time via -ldflags -X main.version=<ver>.
 var version = "0.1.0"
 
 func main() {
-	fmt.Printf("deoxy v%s\n", version)
+	cmd.Execute()
 }
