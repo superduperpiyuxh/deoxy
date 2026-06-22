@@ -10,7 +10,10 @@ GO      ?= go
 all: build test lint
 
 build:
-	$(GO) build -ldflags "-X main.version=$(VERSION)" -o $(BINARY) ./cmd/deoxy
+	CGO_ENABLED=1 $(GO) build -ldflags "-X main.version=$(VERSION)" -o $(BINARY) ./cmd/deoxy
+
+build-race:
+	CGO_ENABLED=1 $(GO) build -race -ldflags "-X main.version=$(VERSION)" -o $(BINARY) ./cmd/deoxy
 
 test:
 	$(GO) test ./... -v -count=1 -race
