@@ -3,30 +3,28 @@ gsd_state_version: '1.0'
 status: completed
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 2
-  completed_plans: 2
-  percent: 33
+  completed_phases: 3
+  total_plans: 18
+  completed_plans: 10
+  percent: 50
 ---
 
 # Project State: deoxy
-
-## Project Reference
 
 **Module:** `github.com/superduperpiyuxh/deoxy`
 **Go version:** 1.26.3
 **Research date:** 2026-06-22
 **Core value:** A single CLI tool that auto-generates doc comments for multiple programming languages using tree-sitter AST analysis — no AI, no cloud, deterministic output.
-**Current focus:** Phase 1 (Core Parser Engine) ✅ Completed
+**Current focus:** Phase 2 (Template Engine) ✅ Completed
 
 ## Current Position
 
-Phase: 1 of 6 (Core Parser Engine) ✓ **Completed**
-Plan: phase-1 — All 14 tasks executed across 4 waves
+Phase: 2 of 6 (Template Engine) ✓ **Completed**
+Plan: phase-2 — 8 tasks executed across 4 waves
 Status: Completed
-Last activity: 2026-06-22 — Phase 1 Core Parser Engine complete
+Last activity: 2026-06-22 — Phase 2 Template Engine complete
 
-Progress: [██████░░░░] 33%
+Progress: [████████░░] 50%
 
 ## Phase 1 Completion Summary
 
@@ -45,12 +43,25 @@ Progress: [██████░░░░] 33%
 - **P1-T13**: `testdata/fixtures/*/sample.*` — 5 fixture files with comprehensive symbol coverage
 - **P1-T14**: `internal/parser/parser_test.go` — 14 integration test cases
 
+## Phase 2 Completion Summary
+
+- **P2-T1**: `internal/template/engine.go` — Engine struct, New, Render, FuncMap helpers (brief, paramDesc, returnDesc, joinParams, commentPrefix)
+- **P2-T2**: `internal/template/engine_test.go` — 19 engine unit tests
+- **P2-T3**: `internal/template/templates.go` — 5 per-language template definitions
+- **P2-T4**: `internal/template/templates_test.go` — Golden file tests with -update flag for all 5 languages
+- **P2-T5**: `internal/config/config.go` — Config struct, LoadConfig, LoadDefaultConfig, yaml.v3 dependency
+- **P2-T6**: `internal/config/config_test.go` — 12 config loading and validation tests
+- **P2-T7**: `internal/generator/generator.go` — Generator orchestrator: scan → parse → render pipeline
+- **P2-T8**: `internal/generator/generator_test.go` — 9 end-to-end pipeline tests
+- **Verification**: go build, go vet, go test all pass. All 5 language templates produce correct output.
+
 ## Performance Metrics
 
 | Phase | Duration | Tasks | Files | Test Count | Pass Rate |
 |-------|----------|-------|-------|------------|-----------|
 | 0 | - | 8 | ~12 | 1 | 100% |
 | 1 | ~8 min | 14 | 18 | 21 | 100% |
+| 2 | ~9 min | 8 | 14 | ~55 | 100% |
 
 ## Accumulated Context
 
@@ -65,6 +76,10 @@ Progress: [██████░░░░] 33%
 - **Go doc style**: GoDoc prose (no `@param` tags) by default; Doxygen-style via config flag
 - **Query embed**: Duplicate .scm files in `internal/parser/queries/` for go:embed (embed cannot use `..` paths)
 - **Grammar imports**: Use `github.com/tree-sitter/tree-sitter-<lang>/bindings/go` import paths
+- **Sequential parsing**: tree-sitter parsers are not thread-safe, so generator processes files sequentially
+- **Template system**: Uses Go text/template (stdlib only) + FuncMap for all helper functions
+- **Golden file tests**: -update flag pattern with per-language expected output files in testdata/golden/
+- **Config merge**: Per-language overrides merged onto language-specific defaults by GetLanguageConfig()
 
 ### Pending Todos
 
@@ -72,12 +87,12 @@ None yet.
 
 ### Blockers/Concerns
 
-None yet.
+- tree-sitter parsers are not thread-safe — parallel file processing requires per-file parser instances (Phase 3)
 
 ## Session Continuity
 
 Last session: 2026-06-22
-Stopped at: Phase 1 (Core Parser Engine) fully implemented and verified
+Stopped at: Phase 2 (Template Engine) fully implemented and verified
 Resume file: None
 
 ## Commit Instructions
@@ -97,6 +112,15 @@ git add internal/parser/queries/
 git add internal/symbol/symbol.go
 git add internal/scanner/scanner.go
 git add internal/scanner/scanner_test.go
+git add internal/template/engine.go
+git add internal/template/templates.go
+git add internal/template/engine_test.go
+git add internal/template/templates_test.go
+git add internal/config/config.go
+git add internal/config/config_test.go
+git add internal/generator/generator.go
+git add internal/generator/generator_test.go
+git add testdata/golden/
 git add Makefile
 git add go.mod go.sum
 git add queries/go/docs.scm
@@ -105,19 +129,4 @@ git add queries/c/docs.scm
 git add queries/cpp/docs.scm
 git add queries/rust/docs.scm
 git add testdata/fixtures/
-
-# Commit
-git commit -m "feat(phase-1): complete Core Parser Engine
-
-- P1-T1: Tree-sitter Go deps + CGO_ENABLED=1 Makefile
-- P1-T2: SymbolInfo, Kind enum, Param types
-- P1-T3: Parser pool with explicit Close() discipline
-- P1-T4: Language registry with embedded queries
-- P1-T5-9: Per-language tree-sitter .scm query files
-- P1-T10: QueryRunner — captures → SymbolInfo extraction
-- P1-T11: File scanner by language extension
-- P1-T12: Scanner test suite (7 tests)
-- P1-T13: Test fixtures for all 5 languages
-- P1-T14: Integration tests (14 subtests, all passing)
-- Verified: go build, go vet, go test, make build, make test"
 ```

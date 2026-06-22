@@ -10,7 +10,7 @@
 
 - [x] **Phase 0: Foundation** — Project scaffolding, module init, CI, README, directory structure
 - [x] **Phase 1: Core Parser Engine** — Tree-sitter integration, language registry, query files, AST extraction
-- [ ] **Phase 2: Template Engine** — Go text/template-based doc generation, per-language comment templates, config system
+- [x] **Phase 2: Template Engine** — Go text/template-based doc generation, per-language comment templates, config system
 - [ ] **Phase 3: CLI** — Cobra CLI with generate/init/watch commands, source injection, stdin/stdout mode
 - [ ] **Phase 4: VS Code Extension** — Thin TypeScript extension + Go sidecar via JSON-RPC over stdio
 - [ ] **Phase 5: Advanced Features** — Smart text (getter/setter/ctor detection), alignment, custom tags, git-aware mode
@@ -71,7 +71,7 @@
 ---
 
 ### Phase 2: Template Engine
-**Goal**: Given `SymbolInfo` from Phase 1, deoxy renders proper doc comments in the target language's format (GoDoc prose, Python docstrings, Doxygen/JSDoc-style for C/C++, Rustdoc)
+**Goal**: ✅ Complete — Given `SymbolInfo` from Phase 1, deoxy renders proper doc comments in the target language's format (GoDoc prose, Python docstrings, Doxygen/JSDoc-style for C/C++, Rustdoc)
 **Depends on**: Phase 1
 **Key files**:
   - `internal/template/engine.go` — Template engine core, applies templates to SymbolInfo
@@ -97,7 +97,18 @@
   - Do NOT implement smart text / name inference (Phase 5)
   - Do NOT handle AI-generated descriptions
   - Do NOT build watch mode
-**Plans**: TBD
+**Plans**: 8 tasks across 4 waves
+**Plan file**: `.planning/plans/phase-2.json`
+
+Plans:
+- [x] P2-T1 — `internal/template/engine.go` — Core template engine with Render()
+- [x] P2-T2 — `internal/template/engine_test.go` — Engine core tests
+- [x] P2-T3 — `internal/template/templates.go` — Per-language template definitions (GoDoc, Doxygen, PyDoc, Rustdoc)
+- [x] P2-T4 — `internal/template/templates_test.go` — Golden file/snapshot tests per language
+- [x] P2-T5 — `internal/config/config.go` — Config file loader for .deoxy.yaml
+- [x] P2-T6 — `internal/config/config_test.go` — Config loading and validation tests
+- [x] P2-T7 — `internal/generator/generator.go` — Pipeline orchestrator (config → scan → parse → render)
+- [x] P2-T8 — `internal/generator/generator_test.go` — End-to-end pipeline tests
 
 ---
 
@@ -222,7 +233,7 @@ Phase 5 depends on Phase 3 (needs CLI config) but not Phase 4 (works without VS 
 |-------|----------------|--------|-----------|
 | 0. Foundation | 8/8 | ✅ Completed | 2026-06-22 |
 | 1. Core Parser Engine | 14/14 | ✅ Completed | 2026-06-22 |
-| 2. Template Engine | 0/0 | Not started | - |
+| 2. Template Engine | 8/8 | ✅ Completed | 2026-06-22 |
 | 3. CLI | 0/0 | Not started | - |
 | 4. VS Code Extension | 0/0 | Not started | - |
 | 5. Advanced Features | 0/0 | Not started | - |
