@@ -1,0 +1,18 @@
+/**
+ * @brief adds a and b and returns the result.
+ * @param a the first operand
+ * @param b the second operand
+ * @return int the int result
+ */
+/**
+ * @brief process_buffers buffer and size and returns the result.
+ * @param buffer the buffer
+ * @param size the size
+ * @return void the void result
+ */
+/**
+ * @brief divides dividend and divisor and returns the result.
+ * @param dividend the dividend
+ * @param divisor the divisor
+ * @return int the int result
+ */

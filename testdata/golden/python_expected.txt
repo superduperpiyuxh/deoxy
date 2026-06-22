@@ -1,0 +1,20 @@
+"""greets name and age and returns the result.
+
+Args:
+    name (str): the name
+    age (int): the age
+
+Returns:
+    str: the str result
+"""
+"""adds a and b and returns the result.
+
+Args:
+    a (int): the first operand
+    b (int): the second operand
+
+Returns:
+    int: the int result
+"""
+"""calculators.
+"""

@@ -1,0 +1,18 @@
+// Add adds a and b and returns the result.
+//
+// a - the first operand
+// b - the second operand
+//
+// returns int: the int result
+// Greet greets name and returns the result.
+//
+// name - the name
+//
+// returns string: the string result
+// Person persons.
+// FirstOrDefault firstOrDefaults items and defaultVal and returns the result.
+//
+// items - the items
+// defaultVal - the defaultVal
+//
+// returns T: the T result
