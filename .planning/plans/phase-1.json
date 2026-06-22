@@ -1,0 +1,773 @@
+{
+  "phase": 1,
+  "name": "Core Parser Engine",
+  "description": "Tree-sitter integration for Go, Python, C, C++, and Rust — source files are parsed and function/method/class/struct/interface signatures are extracted as typed SymbolInfo structs. Builds the parser pool, language registry, per-language tree-sitter query files (.scm), query runner, file scanner, and end-to-end integration tests. Phase 1 delivers zero doc comment generation (Phase 2) and zero source file modification (Phase 3) — only parsing and symbol extraction.",
+  "module": "github.com/superduperpiyuxh/deoxy",
+  "go_version": "1.26.3",
+  "anti_goals": [
+    "Do NOT generate any doc comment text (that is Phase 2)",
+    "Do NOT modify source files (that is Phase 3)",
+    "Do NOT implement CLI commands beyond a debug dump flag (that is Phase 3)",
+    "Do NOT attempt to extract doc comments from function bodies (throw/raise detection deferred)",
+    "Do NOT handle all possible AST node types — start with functions, methods, structs, classes, interfaces, enums",
+    "Do NOT use runtime.SetFinalizer for CGo cleanup — always use explicit Close()",
+    "Do NOT add grammars for languages beyond the five targeted (Go, Python, C, C++, Rust)"
+  ],
+  "roadmap_success_criteria": [
+    "deoxy can parse a Go source file and extract all exported function signatures (name, parameters with types, return types)",
+    "deoxy can parse Go struct definitions and extract field names and types",
+    "deoxy can parse Python function definitions with type annotations",
+    "deoxy can parse C/C++ function declarations (including pointers, arrays in params)",
+    "deoxy can parse Rust function items and struct definitions",
+    "All tree-sitter Parser/Query/QueryCursor objects are explicitly Close()d (verified by test with leak detection)",
+    "Parsers are reused per language (not recreated per file) via a parser pool"
+  ],
+  "tasks": [
+    {
+      "id": "P1-T1",
+      "title": "Add tree-sitter Go dependencies + update Makefile for CGo",
+      "description": "Install the official tree-sitter Go bindings and per-language grammar modules via go get. Each grammar is a separate Go module dependency. Update the Makefile build target to set CGO_ENABLED=1 since tree-sitter Go bindings use CGo to interface with the C library.",
+      "file": "go.mod, Makefile",
+      "dependencies": [],
+      "specification": {
+        "go_get": [
+          "github.com/tree-sitter/go-tree-sitter@v0.25.0",
+          "github.com/tree-sitter/tree-sitter-go@latest",
+          "github.com/tree-sitter/tree-sitter-python@latest",
+          "github.com/tree-sitter/tree-sitter-c@latest",
+          "github.com/tree-sitter/tree-sitter-cpp@latest",
+          "github.com/tree-sitter/tree-sitter-rust@latest"
+        ],
+        "makefile_changes": [
+          "Add CGO_ENABLED=1 to the build target: CGO_ENABLED=1 $(GO) build -ldflags \"-X main.version=$(VERSION)\" -o $(BINARY) ./cmd/deoxy",
+          "CGo is required because go-tree-sitter wraps the tree-sitter C library; tests also need CGO_ENABLED=1 for go test"
+        ],
+        "rationale": "Must use the official tree-sitter/go-tree-sitter v0.25+ (NOT the frozen smacker fork). Each grammar is independently versioned per tree-sitter's modular architecture."
+      },
+      "success_criteria": [
+        "go.mod contains all 6 new dependencies",
+        "go.sum is populated after go mod tidy",
+        "CGO_ENABLED=1 is present in the Makefile build target",
+        "go build ./... succeeds with CGo enabled"
+      ]
+    },
+    {
+      "id": "P1-T2",
+      "title": "Create internal/symbol/symbol.go — SymbolInfo, Kind, Param types",
+      "description": "Define the core type system for parsed symbol information. All subsequent phases consume these types. The SymbolInfo struct holds everything extracted from a tree-sitter query: name, kind, params with types, returns, type params, receiver (for methods), and source line range.",
+      "file": "internal/symbol/symbol.go",
+      "dependencies": [],
+      "specification": {
+        "package": "symbol",
+        "types": {
+          "Kind": {
+            "description": "Enum for symbol classification",
+            "values": [
+              "KindFunction (iota)",
+              "KindMethod",
+              "KindStruct",
+              "KindClass",
+              "KindInterface",
+              "KindEnum"
+            ],
+            "methods": ["func (k Kind) String() string"]
+          },
+          "Param": {
+            "description": "A function/method parameter with name and type",
+            "fields": [
+              {"name": "Name", "type": "string"},
+              {"name": "Type", "type": "string"}
+            ]
+          },
+          "SymbolInfo": {
+            "description": "Complete metadata for a parsed symbol",
+            "fields": [
+              {"name": "Name", "type": "string"},
+              {"name": "Kind", "type": "Kind"},
+              {"name": "Params", "type": "[]Param"},
+              {"name": "Returns", "type": "[]string"},
+              {"name": "TypeParams", "type": "[]Param"},
+              {"name": "Receiver", "type": "*Param", "comment": "nil for functions, set for methods"},
+              {"name": "StartLine", "type": "int", "comment": "0-indexed byte line from tree-sitter"},
+              {"name": "EndLine", "type": "int", "comment": "0-indexed byte line from tree-sitter"}
+            ]
+          }
+        },
+        "exports": ["Kind", "KindFunction", "KindMethod", "KindStruct", "KindClass", "KindInterface", "KindEnum", "Param", "SymbolInfo"],
+        "rationale": "These types form the contract between Phase 1 (parsing) and Phase 2 (template engine). They must be stable and well-documented. No tree-sitter imports here — pure Go types only."
+      },
+      "success_criteria": [
+        "internal/symbol/symbol.go compiles with go build ./internal/symbol/...",
+        "Kind.String() returns lowercase name for each Kind value",
+        "SymbolInfo struct has all 8 fields documented with godoc comments",
+        "No imports from tree-sitter or any external package"
+      ]
+    },
+    {
+      "id": "P1-T3",
+      "title": "Create internal/parser/parser.go — Parser pool with deferred Close() discipline",
+      "description": "Build the Parser wrapper that manages a pool of tree-sitter parsers (one per language). The key design constraint: NEVER rely on runtime.SetFinalizer — always use explicit defer Close() for Parser, Tree, Query, and QueryCursor objects. The Manager struct holds one reusable *ts.Parser per language and provides a Parse(lang, src) method.",
+      "file": "internal/parser/parser.go",
+      "dependencies": ["P1-T1", "P1-T2"],
+      "specification": {
+        "package": "parser",
+        "imports": [
+          "github.com/tree-sitter/go-tree-sitter",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol"
+        ],
+        "types": {
+          "Manager": {
+            "description": "Manages a pool of tree-sitter parsers, one per supported language. Implements io.Closer.",
+            "fields": [
+              {"name": "parsers", "type": "map[string]*sitter.Parser"}
+            ],
+            "methods": [
+              "func NewManager() (*Manager, error) — creates parsers for each language, sets Language on each",
+              "func (m *Manager) Parse(lang string, src []byte) (*sitter.Tree, error) — reuses parser from pool, closes tree on each call, returns new tree; returns error for unsupported languages",
+              "func (m *Manager) Languages() []string — returns slice of registered language names",
+              "func (m *Manager) Close() error — iterates parsers and defers Close() on each, with error collection"
+            ]
+          }
+        },
+        "behavior": {
+          "parser_pool_init": "NewManager calls ts.NewParser() per language, calls SetLanguage(ts.NewLanguage(grammar.GetLanguage())), stores in map. If any grammar fails, Close() already-opened parsers and return error.",
+          "parse_contract": "Parse() must return a new sitter.Tree each call. The caller is responsible for tree.Close(). The Manager.Close() only closes the pool's parser instances.",
+          "close_discipline": "Every tree-sitter object (Parser, Tree, Query, QueryCursor) MUST be explicitly closed. Document this in a package-level comment referencing the PITFALLS.md finding.",
+          "cgo_leak_comment": "Package doc MUST include: 'WARNING: tree-sitter allocates C heap memory. Always defer obj.Close() for every Parser, Tree, Query, and QueryCursor. Never rely on runtime.SetFinalizer.'"
+        },
+        "rationale": "Creating a tree-sitter parser per file causes CGo memory churn. A pool of one parser per language is the documented best practice (ARCHITECTURE.md Anti-Pattern 1, PITFALLS.md Pitfall 1)."
+      },
+      "success_criteria": [
+        "NewManager() creates a Manager with one parser per target language (Go, Python, C, C++, Rust)",
+        "Parse('go', []byte('package main\\n')) returns a Tree without error",
+        "Parse('unsupported', []byte{}) returns an error",
+        "Close() iterates all parsers and calls Close() on each",
+        "Go vet ./internal/parser/ passes with zero warnings",
+        "Package doc contains the CGo leak warning"
+      ]
+    },
+    {
+      "id": "P1-T4",
+      "title": "Create internal/parser/registry.go — Language registry with embedded queries",
+      "description": "Build the language registry that maps file extensions and language names to tree-sitter grammars and embedded query content. Query .scm files are embedded at build time using Go 1.16 //go:embed directives. The registry is consumed by Manager and QueryRunner.",
+      "file": "internal/parser/registry.go",
+      "dependencies": ["P1-T1", "P1-T2"],
+      "specification": {
+        "package": "parser",
+        "imports": [
+          "embed"
+        ],
+        "embed_directives": [
+          "//go:embed ../../queries/go/docs.scm",
+          "//go:embed ../../queries/python/docs.scm",
+          "//go:embed ../../queries/c/docs.scm",
+          "//go:embed ../../queries/cpp/docs.scm",
+          "//go:embed ../../queries/rust/docs.scm"
+        ],
+        "types": {
+          "LanguageConfig": {
+            "description": "Configuration for a single supported language",
+            "fields": [
+              {"name": "Name", "type": "string", "comment": "Canonical name, e.g. 'go', 'python'"},
+              {"name": "Extensions", "type": "[]string", "comment": "File extensions, e.g. []string{'.go'}"},
+              {"name": "Grammar", "type": "func() unsafe.Pointer", "comment": "Getter function like tree_sitter_go.GetLanguage"},
+              {"name": "QueryContent", "type": "string", "comment": "Embedded .scm query file content"}
+            ]
+          }
+        },
+        "exports": {
+          "func GetLanguageConfig(lang string) (*LanguageConfig, bool)": "Looks up config by language name ('go', 'python', etc.)",
+          "func GetConfigForExtension(ext string) (*LanguageConfig, bool)": "Looks up config by file extension ('.go', '.py', etc.)",
+          "func SupportedLanguages() []string": "Returns all registered language names",
+          "func SupportedExtensions() []string": "Returns all registered file extensions"
+        },
+        "grammar_imports": [
+          "tree_sitter_go \"github.com/tree-sitter/tree-sitter-go\"",
+          "tree_sitter_python \"github.com/tree-sitter/tree-sitter-python\"",
+          "tree_sitter_c \"github.com/tree-sitter/tree-sitter-c\"",
+          "tree_sitter_cpp \"github.com/tree-sitter/tree-sitter-cpp\"",
+          "tree_sitter_rust \"github.com/tree-sitter/tree-sitter-rust\""
+        ],
+        "registration_table": [
+          {"Name": "go", "Extensions": [".go"], "Grammar": "tree_sitter_go.GetLanguage"},
+          {"Name": "python", "Extensions": [".py"], "Grammar": "tree_sitter_python.GetLanguage"},
+          {"Name": "c", "Extensions": [".c", ".h"], "Grammar": "tree_sitter_c.GetLanguage"},
+          {"Name": "cpp", "Extensions": [".cpp", ".cc", ".cxx", ".hpp"], "Grammar": "tree_sitter_cpp.GetLanguage"},
+          {"Name": "rust", "Extensions": [".rs"], "Grammar": "tree_sitter_rust.GetLanguage"}
+        ],
+        "rationale": "Central registry avoids scattered switch/if-else chains. Go 1.16 embed bakes query files into the binary — zero runtime file I/O for queries. Embed paths are relative to internal/parser/, hence the ../../ prefix to reach queries/ at project root."
+      },
+      "success_criteria": [
+        "registry.go compiles with go build ./internal/parser/...",
+        "GetLanguageConfig('go') returns config with Name='go' and Extensions=['.go']",
+        "GetConfigForExtension('.cpp') returns config with Name='cpp'",
+        "GetConfigForExtension('.h') returns config with Name='c' (not cpp — C header by default)",
+        "SupportedLanguages() returns ['go', 'python', 'c', 'cpp', 'rust'] in any order",
+        "Each QueryContent string is non-empty (query files exist at embed paths)",
+        "go vet passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P1-T5",
+      "title": "Create queries/go/docs.scm — Tree-sitter query for Go functions, methods, structs, interfaces",
+      "description": "Write a tree-sitter query (.scm) file for the Go grammar that captures function declarations, method declarations, struct type definitions, and interface type definitions. Each capture uses a named group (e.g., @name, @params, @return, @receiver) that QueryRunner maps to SymbolInfo fields.",
+      "file": "queries/go/docs.scm",
+      "dependencies": [],
+      "specification": {
+        "grammar": "tree-sitter-go",
+        "captures": {
+          "@func": "function_declaration — top-level function with name, params, and optional result",
+          "@method": "method_declaration — receiver function with receiver param, name, params, result",
+          "@struct": "struct_type — named struct definition",
+          "@interface": "interface_type — named interface definition",
+          "@name": "identifier or field_identifier — the symbol name",
+          "@params": "parameter_list — function/method parameters",
+          "@return": "result type node — return type(s)",
+          "@receiver": "parameter_list — method receiver"
+        },
+        "query_content": "(function_declaration\n  name: (identifier) @name\n  parameters: (parameter_list) @params\n  result: (_) @return) @func\n\n(method_declaration\n  receiver: (parameter_list) @receiver\n  name: (field_identifier) @name\n  parameters: (parameter_list) @params\n  result: (_) @return) @method\n\n(type_declaration\n  (type_specification\n    name: (type_identifier) @name\n    (struct_type) @struct))\n\n(type_declaration\n  (type_specification\n    name: (type_identifier) @name\n    (interface_type) @interface))",
+        "rationale": "Go grammar uses function_declaration for standalone functions and method_declaration for methods with receivers. Struct_type and interface_type are embedded in type_specification. The captured groups correspond 1:1 to SymbolInfo fields filled by QueryRunner."
+      },
+      "success_criteria": [
+        "queries/go/docs.scm exists and contains valid tree-sitter query syntax",
+        "Query matches function_declaration nodes with @func capture",
+        "Query matches method_declaration nodes with @method capture",
+        "Query matches struct_type nodes with @struct capture",
+        "Query matches interface_type nodes with @interface capture"
+      ]
+    },
+    {
+      "id": "P1-T6",
+      "title": "Create queries/python/docs.scm — Tree-sitter query for Python functions and classes",
+      "description": "Write a tree-sitter query (.scm) file for the Python grammar that captures function definitions and class definitions. Python functions can have type annotations on params and return values via the return_type field.",
+      "file": "queries/python/docs.scm",
+      "dependencies": [],
+      "specification": {
+        "grammar": "tree-sitter-python",
+        "captures": {
+          "@func": "function_definition — def with name, params, optional return_type",
+          "@class": "class_definition — class with name",
+          "@name": "identifier — function or class name",
+          "@params": "parameters — function arguments",
+          "@return": "return_type node — optional return type annotation"
+        },
+        "query_content": "(function_definition\n  name: (identifier) @name\n  parameters: (parameters) @params\n  return_type: (_) @return) @func\n\n(class_definition\n  name: (identifier) @name) @class",
+        "rationale": "Python's function_definition has optional return_type. Class definitions need only the name for SymbolInfo.Kind=KindClass. Methods inside classes are captured as @func — the query runner will infer KindMethod when the first param is 'self' or 'cls' after parsing the parameters."
+      },
+      "success_criteria": [
+        "queries/python/docs.scm exists and contains valid tree-sitter query syntax",
+        "Query matches function_definition nodes with @func capture",
+        "Query matches class_definition nodes with @class capture",
+        "Query captures return_type when present"
+      ]
+    },
+    {
+      "id": "P1-T7",
+      "title": "Create queries/c/docs.scm — Tree-sitter query for C functions",
+      "description": "Write a tree-sitter query (.scm) file for the C grammar that captures function definitions and function declarations. C uses function_declarator with nested declarator for the name, and parameter_list for params.",
+      "file": "queries/c/docs.scm",
+      "dependencies": [],
+      "specification": {
+        "grammar": "tree-sitter-c",
+        "captures": {
+          "@func": "function_definition or declaration with function_declarator",
+          "@name": "identifier — the function name from declarator",
+          "@params": "parameter_list — function parameters",
+          "@return": "type node preceding the declarator"
+        },
+        "query_content": "(function_definition\n  type: (_) @return\n  declarator: (function_declarator\n    declarator: (identifier) @name\n    parameters: (parameter_list) @params)) @func\n\n(declaration\n  type: (_) @return\n  declarator: (function_declarator\n    declarator: (identifier) @name\n    parameters: (parameter_list) @params)) @func",
+        "rationale": "C grammar separates type from declarator. function_declarator contains the function name (identifier) and parameter_list. Forward declarations use the declaration node type. Both definitions and declarations are captured so deoxy can document headers."
+      },
+      "success_criteria": [
+        "queries/c/docs.scm exists and contains valid tree-sitter query syntax",
+        "Query matches function_definition nodes with @func capture",
+        "Query matches declaration nodes with function_declarator",
+        "Query captures return type, function name, and parameter list"
+      ]
+    },
+    {
+      "id": "P1-T8",
+      "title": "Create queries/cpp/docs.scm — Tree-sitter query for C++ functions, methods, classes",
+      "description": "Write a tree-sitter query (.scm) file for the C++ grammar that captures function definitions, class specifications, and struct specifications. C++ methods are function definitions inside class_specifier nodes.",
+      "file": "queries/cpp/docs.scm",
+      "dependencies": [],
+      "specification": {
+        "grammar": "tree-sitter-cpp",
+        "captures": {
+          "@func": "function_definition — free function or method",
+          "@class": "class_specifier — class definition",
+          "@struct": "struct_specifier — struct definition",
+          "@name": "identifier or qualified_identifier — symbol name",
+          "@params": "parameter_list — function parameters",
+          "@return": "type node preceding the declarator"
+        },
+        "query_content": "(function_definition\n  type: (_) @return\n  declarator: (function_declarator\n    declarator: (_) @name\n    parameters: (parameter_list) @params)) @func\n\n(class_specifier\n  name: (type_identifier) @name) @class\n\n(struct_specifier\n  name: (type_identifier) @name) @struct",
+        "rationale": "C++ grammar shares many node types with C. function_definition captures both free functions and methods. class_specifier and struct_specifier are the C++ grammar node names (vs struct_type in Go). The (_) @name wildcard handles both plain identifiers and qualified_identifiers (e.g., ClassName::methodName)."
+      },
+      "success_criteria": [
+        "queries/cpp/docs.scm exists and contains valid tree-sitter query syntax",
+        "Query matches function_definition nodes with @func capture",
+        "Query matches class_specifier nodes with @class capture",
+        "Query matches struct_specifier nodes with @struct capture",
+        "Query detects parameter_list inside function_declarator"
+      ]
+    },
+    {
+      "id": "P1-T9",
+      "title": "Create queries/rust/docs.scm — Tree-sitter query for Rust functions, structs, traits, impls",
+      "description": "Write a tree-sitter query (.scm) file for the Rust grammar that captures function items (free functions), impl blocks containing methods, struct definitions, and trait definitions.",
+      "file": "queries/rust/docs.scm",
+      "dependencies": [],
+      "specification": {
+        "grammar": "tree-sitter-rust",
+        "captures": {
+          "@func": "function_item — top-level function",
+          "@method": "function_item inside impl_item — method with self param",
+          "@struct": "struct_item — named struct",
+          "@interface": "trait_item — named trait definition",
+          "@name": "identifier — symbol name",
+          "@params": "parameters — function/method args",
+          "@return": "return_type — optional return type annotation"
+        },
+        "query_content": "(function_item\n  name: (identifier) @name\n  parameters: (parameters) @params\n  return_type: (_) @return) @func\n\n; Methods inside impl blocks — the function_item node structure is identical;\n; the impl_item context helps QueryRunner distinguish methods from free functions.\n(impl_item\n  (function_item\n    name: (identifier) @name\n    parameters: (parameters) @params\n    return_type: (_) @return) @method)\n\n(struct_item\n  name: (type_identifier) @name) @struct\n\n(trait_item\n  name: (type_identifier) @name) @interface\n\n(enum_item\n  name: (type_identifier) @name) @enum",
+        "rationale": "Rust grammar uses function_item for all function-like nodes (free functions and methods). Methods are distinguished by being inside an impl_item. struct_item, trait_item, and enum_item have predictable type_identifier name fields. The query produces overlapping captures (@func and @method for impl methods) — QueryRunner deduplicates by checking the @method annotation first."
+      },
+      "success_criteria": [
+        "queries/rust/docs.scm exists and contains valid tree-sitter query syntax",
+        "Query matches function_item nodes with @func capture",
+        "Query matches impl_item + function_item with @method capture",
+        "Query matches struct_item nodes with @struct capture",
+        "Query matches trait_item nodes with @interface capture"
+      ]
+    },
+    {
+      "id": "P1-T10",
+      "title": "Create internal/parser/queryrunner.go — Query capture to SymbolInfo extraction",
+      "description": "Build the QueryRunner that executes a language's embedded .scm query against a parsed tree-sitter Tree, then maps named captures to SymbolInfo structs. Each language has different capture semantics — the runner reads capture names to determine Kind, extracts parameter names/types from @params, return types from @return, receiver info from @receiver.",
+      "file": "internal/parser/queryrunner.go",
+      "dependencies": ["P1-T2", "P1-T3", "P1-T4", "P1-T5", "P1-T6", "P1-T7", "P1-T8", "P1-T9"],
+      "specification": {
+        "package": "parser",
+        "imports": [
+          "fmt",
+          "strings",
+          "github.com/tree-sitter/go-tree-sitter",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol"
+        ],
+        "exports": {
+          "func RunQuery(tree *sitter.Tree, queryContent string, lang string) ([]symbol.SymbolInfo, error)": "Main entry point. Creates a Query from queryContent, executes against tree root, iterates captures, calls extractSymbolInfo for each match."
+        },
+        "internal_helpers": {
+          "func extractSymbolInfo(matches []sitter.QueryMatch, captures map[string]string, lang string) (symbol.SymbolInfo, error)": "Maps capture names to SymbolInfo fields. Uses a per-language switch for capture-name interpretation.",
+          "func parseParams(node *sitter.Node, lang string) []symbol.Param": "Extracts parameter names and types from a parameter_list node. Each language grammar nests parameters differently.",
+          "func parseReturnTypes(node *sitter.Node, lang string) []string": "Extracts return type strings from a result/return_type node.",
+          "func parseReceiver(node *sitter.Node, lang string) *symbol.Param": "Extracts receiver parameter (for Go methods). Returns nil for non-method captures.",
+          "func nodeText(node *sitter.Node, tree *sitter.Tree) string": "Extracts source text for a given AST node using tree byte range."
+        },
+        "capture_name_mapping": {
+          "Go": {
+            "method_receiver": "@receiver capture on method_declaration",
+            "method_params": "@params on method_declaration includes full parameter list including receiver; receiver param must be stripped from Params and set as Receiver field",
+            "function_params": "@params on function_declaration is the direct parameter list",
+            "struct_interface": "@struct and @interface captures have @name but no @params/@return — Kind is set accordingly"
+          },
+          "Python": {
+            "self_param_detection": "When a function_definition's first param is 'self' or 'cls', the function is classified as KindMethod and self/cls is removed from Params",
+            "return_optional": "@return may be absent for functions without return type annotations"
+          },
+          "C": {
+            "function_params": "C parameter_list may include void — skip void as a parameter when it's the sole parameter",
+            "return_type": "Return type includes qualifiers (const, unsigned, etc.) — extract full type text before declarator"
+          },
+          "Cpp": {
+            "method_context": "QueryRunner checks if a @func match is inside a class_specifier — if yes, it's KindMethod instead of KindFunction",
+            "default_args": "Parameters may have default values — only extract name and type, ignore default value text"
+          },
+          "Rust": {
+            "method_detection": "@method captures from impl_item always produce KindMethod; standalone @func produces KindFunction",
+            "self_param": "If first param is 'self', '&self', '&mut self', 'self: Self', etc., treat it as the method receiver and set Receiver.Field, remove from Params"
+          }
+        },
+        "close_discipline": {
+          "query": "defer q.Close() after sitter.NewQuery()",
+          "cursor": "defer cursor.Close() after q.Execute()",
+          "tree": "The Tree is passed in from the caller (Manager.Parse); the caller is responsible for tree.Close(). QueryRunner does NOT close the Tree."
+        },
+        "rationale": "QueryRunner is the core intelligence of Phase 1 — it translates tree-sitter's flat capture stream into structured SymbolInfo. The per-language capture-name mapping is essential because each grammar uses different node types and nesting patterns (PITFALLS.md Pitfall 2). Keeping all language logic in one file avoids scattered per-language extractors and makes the mapping explicit."
+      },
+      "success_criteria": [
+        "RunQuery with Go query against a Go function_declaration returns SymbolInfo with Name, Kind=KindFunction, populated Params, populated Returns",
+        "RunQuery with Go query against a Go method_declaration returns SymbolInfo with Receiver set and Kind=KindMethod",
+        "RunQuery with Python query against a class_definition returns SymbolInfo with Kind=KindClass",
+        "RunQuery with Python query against a method with 'self' first param sets Receiver and removes self from Params",
+        "RunQuery with C query returns Kind=KindFunction for function_definition",
+        "RunQuery with C++ query returns Kind=KindClass for class_specifier",
+        "RunQuery with Rust query returns Kind=KindMethod for @method capture",
+        "All Query and QueryCursor objects are explicitly Close()d (verify via manual code inspection or debug logging)",
+        "Go vet ./internal/parser/ passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P1-T11",
+      "title": "Create internal/scanner/scanner.go — File discovery by language extension",
+      "description": "Build the Scanner that discovers source files by walking directories or matching glob patterns, then groups them by detected language. Uses the registry from internal/parser to map file extensions to language names. Pure filesystem operations — no tree-sitter dependency.",
+      "file": "internal/scanner/scanner.go",
+      "dependencies": ["P1-T4"],
+      "specification": {
+        "package": "scanner",
+        "imports": [
+          "os",
+          "path/filepath",
+          "strings",
+          "github.com/superduperpiyuxh/deoxy/internal/parser"
+        ],
+        "types": {
+          "FileEntry": {
+            "description": "A single discovered source file with its language identity",
+            "fields": [
+              {"name": "Path", "type": "string", "comment": "Absolute file path"},
+              {"name": "Language", "type": "string", "comment": "Canonical language name ('go', 'python', etc.)"},
+              {"name": "RelPath", "type": "string", "comment": "Path relative to scan root"}
+            ]
+          },
+          "Result": {
+            "description": "Scan results grouped by language",
+            "fields": [
+              {"name": "Files", "type": "[]FileEntry", "comment": "Flat list of all discovered files"},
+              {"name": "ByLanguage", "type": "map[string][]FileEntry", "comment": "Files grouped by Language name"}
+            ]
+          }
+        },
+        "exports": {
+          "func Scan(paths ...string) (*Result, error)": "Scans the given file/directory paths, discovers source files by extension matching against the registry",
+          "func ScanWithExtensions(paths []string, extensions []string) (*Result, error)": "Scans but only returns files matching provided extensions",
+          "func DetectLanguage(path string) (string, bool)": "Returns language name for a file path based on extension, or false if unknown"
+        },
+        "behavior": {
+          "directory_walk": "For each path: if it's a directory, walk all files recursively; if it's a file, check extension. Skip hidden files/dirs (starting with .), skip vendor/ and node_modules/ directories.",
+          "extension_check": "Use parser.GetConfigForExtension() to map extension to language. Unknown extensions are silently skipped.",
+          "deduplication": "If the same file is discovered via multiple paths, include it only once (by resolved absolute path)."
+        },
+        "rationale": "Scanner is intentionally decoupled from the parser — it only needs the registry's extension mapping. This separation means scanner tests don't need tree-sitter or CGo, keeping test cycles fast. The Result.ByLanguage map directly feeds the batch processing pipeline in Phase 3."
+      },
+      "success_criteria": [
+        "Scan('.') on the project root discovers *.go files in cmd/ and internal/",
+        "DetectLanguage('main.go') returns ('go', true)",
+        "DetectLanguage('main.py') returns ('python', true)",
+        "DetectLanguage('main.rs') returns ('rust', true)",
+        "DetectLanguage('main.js') returns ('', false) — JS not supported yet",
+        "Scan skips hidden directories (.git, .planning) and vendor/",
+        "Scan returns files deduplicated when same file discovered via multiple input paths",
+        "go build ./internal/scanner/... succeeds"
+      ]
+    },
+    {
+      "id": "P1-T12",
+      "title": "Create internal/scanner/scanner_test.go — Scanner test suite",
+      "description": "Write the test suite for the Scanner package. Tests cover happy-path file discovery, extension mapping, hidden-directory skipping, deduplication, and edge cases like empty paths and non-existent directories.",
+      "file": "internal/scanner/scanner_test.go",
+      "dependencies": ["P1-T11"],
+      "specification": {
+        "package": "scanner",
+        "test_cases": [
+          {
+            "name": "TestDiscoverGoFiles",
+            "setup": "Create temp dir with main.go and helper.go",
+            "assert": "Scan returns 2 files, both with Language='go'"
+          },
+          {
+            "name": "TestDiscoverAllLanguages",
+            "setup": "Create temp dir with main.go, main.py, main.c, main.cpp, main.rs",
+            "assert": "Scan returns 5 files, ByLanguage has 5 entries"
+          },
+          {
+            "name": "TestSkipsHidden",
+            "setup": "Create temp dir with .hidden/main.go and visible/main.py",
+            "assert": "Scan returns 1 file (main.py only)"
+          },
+          {
+            "name": "TestDetectLanguage",
+            "setup": "Call DetectLanguage with various extensions",
+            "assert": "Table-driven test: input → expected (lang, ok)"
+          },
+          {
+            "name": "TestUnknownExtensionSkipped",
+            "setup": "Create temp dir with main.js and main.go",
+            "assert": "Scan returns 1 file (main.go only)"
+          },
+          {
+            "name": "TestDeduplication",
+            "setup": "Scan same file via two paths (relative and absolute)",
+            "assert": "Result.Files has exactly 1 entry for that file"
+          },
+          {
+            "name": "TestNonExistentDirectory",
+            "setup": "Scan('/nonexistent/path')",
+            "assert": "Returns error (directory not found), not a panic"
+          }
+        ],
+        "rationale": "Scanner tests are pure Go filesystem operations — no tree-sitter, no CGo, no build tags needed. Fast test execution independent of the parser stack."
+      },
+      "success_criteria": [
+        "All 7 test cases pass with go test ./internal/scanner/ -v -count=1",
+        "Test coverage reports > 70% for scanner.go (statements)",
+        "Tests run without CGo (no CGO_ENABLED needed for scanner tests)"
+      ]
+    },
+    {
+      "id": "P1-T13",
+      "title": "Create test fixture source files for all 5 languages",
+      "description": "Write small, representative source files for each target language that contain functions, methods, structs, classes, interfaces, and traits. These fixtures are used by the integration tests in P1-T14. Files must be syntactically valid but need not compile (e.g., Go fixtures with missing imports are OK as long as they tokenize correctly).",
+      "file": "testdata/*.go, testdata/*.py, testdata/*.c, testdata/*.cpp, testdata/*.rs, testdata/*.h, testdata/*.hpp",
+      "dependencies": [],
+      "specification": {
+        "fixtures": {
+          "go": {
+            "file": "testdata/fixtures/go/sample.go",
+            "content_summary": "Package with: exported function with params + return, unexported function, method on struct (value receiver), method on struct (pointer receiver), struct definition with fields, interface definition, function with multiple return values, generic function with type params, function with no params/no return"
+          },
+          "python": {
+            "file": "testdata/fixtures/python/sample.py",
+            "content_summary": "Module with: function with type annotations, function without annotations, function with return type, class definition, method with self, method with cls (classmethod), dunder method __init__, function with *args and **kwargs"
+          },
+          "c": {
+            "file": "testdata/fixtures/c/sample.c",
+            "content_summary": "File with: function definition (int add(int, int)), function with pointers, void function, function with array param, function declaration (forward declaration), static function"
+          },
+          "cpp": {
+            "file": "testdata/fixtures/cpp/sample.cpp",
+            "content_summary": "File with: free function, class definition, method inside class, struct definition, method with default args, function with const reference param, inline function"
+          },
+          "rust": {
+            "file": "testdata/fixtures/rust/sample.rs",
+            "content_summary": "Module with: standalone function, function with return type, struct definition, struct with impl block, trait definition, trait implementation, enum definition, generic function"
+          }
+        },
+        "fixture_design_rules": [
+          "Every fixture must be syntactically valid for its language (tree-sitter must parse without errors)",
+          "Each fixture must contain at least 2 of each symbol type to test multiple capture scenarios",
+          "No external imports beyond stdlib — fixtures must be self-contained",
+          "Fixtures should have deterministic line numbers so assertions can predict StartLine/EndLine",
+          "Place under testdata/fixtures/<lang>/ for isolation from Go test packages"
+        ],
+        "rationale": "Test fixtures are the ground truth for integration tests. Well-designed fixtures exercise both common cases (func with params) and edge cases (no params, no return, generic type params). Placed in testdata/ to follow Go conventions — testdata dirs are excluded from build by the Go toolchain."
+      },
+      "success_criteria": [
+        "All 6 fixture directories exist under testdata/fixtures/",
+        "Each language has at least one .scm-queryable source file",
+        "Go fixture treesitter.Parse succeeds (syntactically valid)",
+        "Python fixture treesitter.Parse succeeds",
+        "C fixture treesitter.Parse succeeds",
+        "C++ fixture treesitter.Parse succeeds",
+        "Rust fixture treesitter.Parse succeeds",
+        "Go fixture contains at least: 2 functions, 2 methods, 1 struct, 1 interface",
+        "Python fixture contains at least: 2 functions, 1 class with methods",
+        "C fixture contains at least: 3 functions (mixed signatures)",
+        "C++ fixture contains at least: 1 function, 1 class with method, 1 struct",
+        "Rust fixture contains at least: 1 function, 1 struct, 1 trait, 1 impl with method"
+      ]
+    },
+    {
+      "id": "P1-T14",
+      "title": "Create internal/parser/parser_test.go — End-to-end integration test per language",
+      "description": "Write the comprehensive integration test suite that validates the full parse → query → SymbolInfo pipeline for all 5 languages. Tests read fixture files, parse them with Manager, run RunQuery, and verify the resulting SymbolInfo structs match expected values. Includes a deferred-Close() verification pattern using GODEBUG=cgocheck=2.",
+      "file": "internal/parser/parser_test.go",
+      "dependencies": ["P1-T10", "P1-T13"],
+      "specification": {
+        "package": "parser",
+        "imports": [
+          "os",
+          "path/filepath",
+          "testing",
+          "github.com/tree-sitter/go-tree-sitter",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol"
+        ],
+        "test_cases": [
+          {
+            "name": "TestParseGoFunctions",
+            "fixture": "testdata/fixtures/go/sample.go",
+            "assertions": [
+              "Returns at least 1 SymbolInfo with Kind=KindFunction",
+              "Function name matches expected from fixture",
+              "Params are populated with Name and Type fields",
+              "Returns array is non-empty for functions with return types",
+              "StartLine and EndLine point to correct positions"
+            ]
+          },
+          {
+            "name": "TestParseGoMethods",
+            "fixture": "testdata/fixtures/go/sample.go",
+            "assertions": [
+              "Returns at least 1 SymbolInfo with Kind=KindMethod",
+              "Receiver field is non-nil with correct type (e.g., '*MyStruct' or 'MyStruct')",
+              "Method name is captured (not the receiver name)"
+            ]
+          },
+          {
+            "name": "TestParseGoStructs",
+            "fixture": "testdata/fixtures/go/sample.go",
+            "assertions": [
+              "Returns at least 1 SymbolInfo with Kind=KindStruct",
+              "Name matches struct name from fixture",
+              "Params and Returns are empty for struct symbols"
+            ]
+          },
+          {
+            "name": "TestParseGoInterfaces",
+            "fixture": "testdata/fixtures/go/sample.go",
+            "assertions": [
+              "Returns at least 1 SymbolInfo with Kind=KindInterface"
+            ]
+          },
+          {
+            "name": "TestParsePythonFunctions",
+            "fixture": "testdata/fixtures/python/sample.py",
+            "assertions": [
+              "Returns at least 1 SymbolInfo with Kind=KindFunction",
+              "Params include type annotations when present",
+              "Returns includes return type when annotated"
+            ]
+          },
+          {
+            "name": "TestParsePythonClasses",
+            "fixture": "testdata/fixtures/python/sample.py",
+            "assertions": [
+              "Returns at least 1 SymbolInfo with Kind=KindClass",
+              "Methods inside class are classified as KindMethod (self param detected)"
+            ]
+          },
+          {
+            "name": "TestParseCFunctions",
+            "fixture": "testdata/fixtures/c/sample.c",
+            "assertions": [
+              "Returns at least 1 SymbolInfo with Kind=KindFunction",
+              "Params include pointer types (e.g., 'int *')",
+              "Return type is captured (e.g., 'int', 'void')"
+            ]
+          },
+          {
+            "name": "TestParseCppFunctionsAndClasses",
+            "fixture": "testdata/fixtures/cpp/sample.cpp",
+            "assertions": [
+              "Returns at least 1 KindFunction and 1 KindClass",
+              "Methods inside classes have correct Kind",
+              "C++ parameter types are captured (references, const, etc.)"
+            ]
+          },
+          {
+            "name": "TestParseRustFunctionsAndStructs",
+            "fixture": "testdata/fixtures/rust/sample.rs",
+            "assertions": [
+              "Returns at least 1 KindFunction, 1 KindStruct, 1 KindInterface (trait)",
+              "Methods in impl blocks have Kind=KindMethod",
+              "Rust generic parameters are captured in TypeParams"
+            ]
+          },
+          {
+            "name": "TestParserPoolReusesParsers",
+            "fixture": "testdata/fixtures/go/sample.go",
+            "assertions": [
+              "Call Manager.Parse() twice on same language returns two different *sitter.Tree pointers",
+              "Both trees parse correctly (identical SymbolInfo results)",
+              "The Manager's internal parser map has exactly 5 entries after NewManager()"
+            ]
+          },
+          {
+            "name": "TestAllObjectsClosed",
+            "fixture": "testdata/fixtures/go/sample.go",
+            "assertions": [
+              "Runs with GODEBUG=cgocheck=2 (or equivalent) if environment allows",
+              "After Manager.Close() and tree.Close(), no tree-sitter C objects remain allocated (note: exact C mem verification is advisory — primary check is code audit for defer Close() calls in Manager.Parse, RunQuery, and all test paths)"
+            ]
+          },
+          {
+            "name": "TestUnsupportedLanguage",
+            "assertions": [
+              "Parse('javascript', []byte{}) produces error",
+              "Parse('unsupported', []byte{}) produces error with descriptive message"
+            ]
+          },
+          {
+            "name": "TestEmptySource",
+            "assertions": [
+              "Parse('go', []byte{}) returns nil tree with nil error (tree-sitter handles empty source gracefully)"
+            ]
+          }
+        ],
+        "test_execution": {
+          "subtests": "Use t.Run() for each language and each symbol kind for clear failure reporting",
+          "parallelism": "Language subtests can run in parallel with t.Parallel() since Manager provides isolated parsers per language",
+          "expected_symbol_count": "Each test should assert a minimum count (>= N) rather than exact count, to avoid brittleness from query changes",
+          "skip_slow": "The GODEBUG test can be a manual/skip test (-short skips it) since it adds ~2s and is unnecessary on every run"
+        },
+        "rationale": "Integration tests are the gate for Phase 1 completion. Each language gets explicit coverage. The parser pool reuse test ensures the architectural decision from ARCHITECTURE.md is validated. The deferred-Close test codifies the #1 pitfall from PITFALLS.md."
+      },
+      "success_criteria": [
+        "go test ./internal/parser/ -v -count=1 passes with all subtests green",
+        "go test ./internal/parser/ -v -count=1 -short passes (skips slow GODEBUG test)",
+        "Go fixture: at least 1 function, 1 method, 1 struct, 1 interface detected",
+        "Python fixture: at least 1 function, 1 class detected",
+        "C fixture: at least 2 functions detected",
+        "C++ fixture: at least 1 function, 1 class detected",
+        "Rust fixture: at least 1 function, 1 struct, 1 trait detected",
+        "Parser pool test confirms 5 parsers created, reused across 2 parse calls",
+        "Zero CGo leaks after Close() confirmed by manual code audit of all defer Close() patterns"
+      ]
+    }
+  ],
+  "execution_order": [
+    {
+      "wave": 1,
+      "tasks": ["P1-T1", "P1-T2", "P1-T5", "P1-T6", "P1-T7", "P1-T8", "P1-T9", "P1-T13"],
+      "rationale": "No Go code dependencies among these tasks. T1 (go get) fetches tree-sitter grammars. T2 (symbol.go) is pure Go types with no imports — fully independent. T5-T9 (query .scm files) are text files with no Go dependency. T13 (test fixtures) are source text files — no Go build dependency. All can execute in parallel."
+    },
+    {
+      "wave": 2,
+      "tasks": ["P1-T3", "P1-T4", "P1-T11"],
+      "rationale": "T3 (parser.go) needs tree-sitter imports from T1 and symbol types from T2. T4 (registry.go) needs tree-sitter grammar imports from T1 and query files from T5-T9 (for embed directives). T11 (scanner.go) needs registry extension mapping from T4. T3 and T4 share package parser/ but do not overlap files (parser.go vs registry.go) — they can be built in parallel within the same wave."
+    },
+    {
+      "wave": 3,
+      "tasks": ["P1-T10", "P1-T12"],
+      "rationale": "T10 (queryrunner.go) depends on symbol types (T2), parser Manager (T3), registry (T4), and query content (T5-T9). T12 (scanner_test.go) depends on scanner.go (T11). No cross-dependency between T10 and T12 — they target different packages."
+    },
+    {
+      "wave": 4,
+      "tasks": ["P1-T14"],
+      "rationale": "Integration test (parser_test.go) depends on everything: queryrunner (T10), parser Manager (T3), registry (T4), symbol types (T2), query files (T5-T9), and test fixtures (T13). Must execute after all prior waves complete. This is the gate for Phase 1 completion."
+    }
+  ],
+  "verification": [
+    {"step": "go build ./...", "expected": "exit code 0, CGO_ENABLED=1, all packages compile with tree-sitter CGo bindings"},
+    {"step": "go vet ./...", "expected": "exit code 0, zero warnings across all packages"},
+    {"step": "go test ./internal/symbol/... -v -count=1", "expected": "exit code 0, SymbolInfo types compile and Kind.String() works"},
+    {"step": "go test ./internal/scanner/... -v -count=1", "expected": "exit code 0, all 7 scanner tests pass"},
+    {"step": "go test ./internal/parser/... -v -count=1", "expected": "exit code 0, all integration tests pass for all 5 languages"},
+    {"step": "go test ./... -count=1", "expected": "exit code 0, full project test suite passes"},
+    {"step": "make build", "expected": "produces ./deoxy binary with CGO_ENABLED=1"},
+    {"step": "make test", "expected": "all targets pass with -race enabled"},
+    {"step": "Code audit for defer Close()", "expected": "Every tree-sitter object creation (NewParser, NewQuery, Query.Execute) has a matching defer obj.Close() or explicit Close() within the same function scope. Zero exceptions."},
+    {"step": "Manual integration: parse Go fixture", "expected": "deoxy (with a debug flag or via test) can parse testdata/fixtures/go/sample.go and print SymbolInfo to stdout"}
+  ],
+  "completion_state": {
+    "go_build_passes": true,
+    "go_vet_passes": true,
+    "go_test_passes": true,
+    "all_5_languages_parse": true,
+    "go_functions_extracted": true,
+    "go_methods_extracted": true,
+    "go_structs_extracted": true,
+    "go_interfaces_extracted": true,
+    "python_functions_extracted": true,
+    "python_classes_extracted": true,
+    "c_functions_extracted": true,
+    "cpp_functions_and_classes_extracted": true,
+    "rust_functions_and_structs_and_traits_extracted": true,
+    "parser_pool_active": true,
+    "all_tree_sitter_objects_closed": true,
+    "query_files_embedded": true,
+    "scanner_discovers_by_extension": true,
+    "no_doc_comments_generated": true,
+    "no_source_files_modified": true
+  }
+}

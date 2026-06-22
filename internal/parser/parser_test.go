@@ -525,3 +525,213 @@ func TestManagerLanguages(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLargeFile(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	src := readFixture(t, fixturePath(t, "go", "large_file.go"))
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	cfg, _ := GetLanguageConfig("go")
+	results, err := RunQuery(tree, cfg.QueryContent, "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery failed: %v", err)
+	}
+
+	if len(results) != 50 {
+		t.Errorf("expected 50 functions, got %d", len(results))
+	}
+}
+
+func TestParseCommentsOnly(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	src := readFixture(t, fixturePath(t, "go", "comments_only.go"))
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	cfg, _ := GetLanguageConfig("go")
+	results, err := RunQuery(tree, cfg.QueryContent, "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery failed: %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Errorf("expected 0 symbols for comments-only file, got %d", len(results))
+	}
+}
+
+func TestParseSyntaxErrorGraceful(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	src := readFixture(t, fixturePath(t, "go", "syntax_error.go"))
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	if tree.RootNode().HasError() == false {
+		t.Log("tree-sitter reports no error — it may still parse partial AST")
+	}
+
+	cfg, _ := GetLanguageConfig("go")
+	results, err := RunQuery(tree, cfg.QueryContent, "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery failed: %v", err)
+	}
+
+	t.Logf("syntax error file produced %d results (tree-sitter is resilient)", len(results))
+}
+
+func TestParsePerformanceManyFiles(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	// Parse all 5 languages to stress-test parser reuse
+	type langFile struct {
+		lang string
+		file string
+	}
+	languages := []langFile{
+		{"go", "sample.go"},
+		{"python", "sample.py"},
+		{"c", "sample.c"},
+		{"cpp", "sample.cpp"},
+		{"rust", "sample.rs"},
+	}
+	for _, lf := range languages {
+		src := readFixture(t, fixturePath(t, lf.lang, lf.file))
+		tree, err := manager.Parse(lf.lang, src)
+		if err != nil {
+			t.Fatalf("Parse %s failed: %v", lf.lang, err)
+		}
+		tree.Close()
+	}
+
+	langs := manager.Languages()
+	if len(langs) != 5 {
+		t.Errorf("expected 5 parsers in pool, got %d", len(langs))
+	}
+}
+
+func TestParseGoEdgeCases(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	src := readFixture(t, fixturePath(t, "go", "edge_cases.go"))
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	cfg, _ := GetLanguageConfig("go")
+	results, err := RunQuery(tree, cfg.QueryContent, "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery failed: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("expected at least some results from edge cases file")
+	}
+}
+
+func TestParseAllLanguagesSimultaneous(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	type langFixture struct {
+		lang     string
+		filename string
+	}
+	tests := []langFixture{
+		{"go", "sample.go"},
+		{"python", "sample.py"},
+		{"c", "sample.c"},
+		{"cpp", "sample.cpp"},
+		{"rust", "sample.rs"},
+	}
+
+	for _, tf := range tests {
+		t.Run(tf.lang, func(t *testing.T) {
+			src := readFixture(t, fixturePath(t, tf.lang, tf.filename))
+			tree, err := manager.Parse(tf.lang, src)
+			if err != nil {
+				t.Fatalf("Parse %s failed: %v", tf.lang, err)
+			}
+			defer tree.Close()
+
+			cfg, ok := GetLanguageConfig(tf.lang)
+			if !ok {
+				t.Fatalf("no config for %s", tf.lang)
+			}
+			results, err := RunQuery(tree, cfg.QueryContent, tf.lang, src)
+			if err != nil {
+				t.Fatalf("RunQuery %s failed: %v", tf.lang, err)
+			}
+			if len(results) == 0 {
+				t.Errorf("%s: expected at least 1 symbol, got 0", tf.lang)
+			}
+		})
+	}
+}
+
+func TestParseGoNestedTypes(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	src := readFixture(t, fixturePath(t, "go", "nested_types.go"))
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	cfg, _ := GetLanguageConfig("go")
+	results, err := RunQuery(tree, cfg.QueryContent, "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery failed: %v", err)
+	}
+
+	var structs int
+	for _, r := range results {
+		if r.Kind == symbol.KindStruct {
+			structs++
+		}
+	}
+	if structs != 2 {
+		t.Errorf("expected 2 structs, got %d", structs)
+	}
+}
