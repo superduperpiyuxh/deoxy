@@ -1,0 +1,11 @@
+out
+node_modules
+.vscode-test/
+*.vsix
+coverage/
+.DS_Store
+/npm-debug.log
+/.nyc_output/
+package-lock.json
+/deoxy
+/deoxy.exe

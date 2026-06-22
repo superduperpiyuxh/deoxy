@@ -1,0 +1,30 @@
+# GoReleaser configuration for deoxy cross-compilation.
+# Version 2 format.
+#
+# Builds deoxy for linux, darwin (macOS), and windows on amd64 and arm64.
+# Version string is injected via -ldflags matching main.version in cmd/deoxy/main.go.
+version: 2
+
+project_name: deoxy
+
+builds:
+  - id: deoxy
+    main: ./cmd/deoxy
+    binary: deoxy
+    ldflags:
+      - -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip

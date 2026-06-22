@@ -1,0 +1,236 @@
+{
+  "phase": 0,
+  "name": "Foundation",
+  "description": "Project scaffolding — module init, entry point, CI, README, directory structure, release configuration. All eight tasks produce the minimum skeleton needed for Phase 1 to begin.",
+  "module": "github.com/superduperpiyuxh/deoxy",
+  "go_version": "1.26.3",
+  "anti_goals": [
+    "No tree-sitter dependencies (Phase 1 adds them)",
+    "No CLI API surface or cobra commands (Phase 3)",
+    "No application logic (parsing, templates, injection)",
+    "No VS Code extension infrastructure (Phase 4)"
+  ],
+  "roadmap_success_criteria": [
+    "go build ./... succeeds with zero errors",
+    "go test ./... passes (trivial placeholder test)",
+    "CI pipeline (GitHub Actions) runs on push/PR and reports green",
+    "Project directory layout established (cmd/, internal/, queries/)"
+  ],
+  "tasks": [
+    {
+      "id": "P0-T1",
+      "title": "main.go — Entry point that prints version and exits",
+      "description": "Create the program entry point at cmd/deoxy/main.go. It should print a version string in the format `deoxy v0.1.0` to stdout and exit with code 0. No CLI framework yet — this is a minimal skeleton.",
+      "file": "cmd/deoxy/main.go",
+      "dependencies": [],
+      "specification": {
+        "contents": "Package main at cmd/deoxy/main.go.\n- Single constant `version = \"0.1.0\"` (or `v0.1.0`)\n- `func main()` prints `deoxy v0.1.0` to stdout, then returns (exit 0)\n- No imports beyond \"fmt\" and \"os\"\n- `package main` at cmd/deoxy means `deoxy` binary in root"
+      },
+      "success_criteria": [
+        "cmd/deoxy/main.go exists and is valid Go",
+        "go build ./cmd/deoxy produces a working binary",
+        "./deoxy outputs 'deoxy v0.1.0' and exits with code 0",
+        "go vet ./cmd/deoxy passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P0-T2",
+      "title": "Internal structure — Ensure all subdirectories exist",
+      "description": "The standard project layout must exist before any code is written. Most directories already exist (cmd/, internal/, internal/config/, internal/parser/, internal/generator/, internal/lang/). Verify they exist and create the missing `queries/` directory (for tree-sitter .scm query files) and `queries/go/`, `queries/python/`, `queries/c/`, `queries/cpp/`, `queries/rust/` subdirectories. Also ensure internal subdirectories have Go package stub files so `go test ./...` can work on empty packages.",
+      "file": "multiple directories",
+      "dependencies": [],
+      "specification": {
+        "existing": ["cmd/deoxy/", "internal/config/", "internal/generator/", "internal/lang/", "internal/parser/"],
+        "create": [
+          "queries/",
+          "queries/go/",
+          "queries/python/",
+          "queries/c/",
+          "queries/cpp/",
+          "queries/rust/"
+        ],
+        "stubs": "Create empty Go stub files (e.g., internal/config/doc.go with `package config`) for each internal package so the compiler doesn't complain about empty directories. Each stub should have a descriptive package comment."
+      },
+      "success_criteria": [
+        "All internal/ subpackages exist with Go stub files (at minimum a doc.go or similar)",
+        "queries/ and its per-language subdirectories exist",
+        "go build ./internal/... succeeds",
+        "Directory tree matches standard Go project layout"
+      ]
+    },
+    {
+      "id": "P0-T3",
+      "title": "Placeholder test — so go test ./... passes",
+      "description": "Create a trivial passing test so that `go test ./...` returns zero failures. Ideally place it at the root package or in an internal package. Should be a no-op test that simply asserts true — its purpose is to make CI pass until real tests are written in later phases.",
+      "file": "internal/placeholder_test.go or similar",
+      "dependencies": ["P0-T2"],
+      "specification": {
+        "package": "Choose an internal package that gets imported by future code or just root. Prefer a dedicated package like `internal/version/` or simply add a test to an existing internal package.",
+        "test": "func TestPlaceholder(t *testing.T) { /* no-op, just passes */ }",
+        "rationale": "go test ./... fails if no test files exist at all in a valid package — an empty package with no _test.go is fine, but if the root package has no .go files it won't compile. The test ensures the CI gate passes."
+      },
+      "success_criteria": [
+        "Test file compiles without errors",
+        "go test ./... passes with at least 1 test run (not 0 tests)",
+        "Test can be removed in Phase 1 once real tests exist"
+      ]
+    },
+    {
+      "id": "P0-T4",
+      "title": "Makefile — build, test, lint, clean targets",
+      "description": "A standard Go project Makefile with the following targets:\n- `build`: builds the deoxy binary at ./deoxy (or ./bin/deoxy)\n- `test`: runs `go test ./... -v -count=1`\n- `lint`: runs `golangci-lint run ./...` (if available, else `go vet ./...`)\n- `clean`: removes the built binary and any artifacts\n- `all` (default): build + test + lint\n\nShould use `$(BINARY)` and `$(VERSION)` variables for easy modification. Do not add any Phase-specific logic (e.g., embedded grammars).",
+      "file": "Makefile",
+      "dependencies": ["P0-T1", "P0-T3"],
+      "specification": {
+        "variables": ["BINARY=deoxy", "VERSION=0.1.0", "GO=go"],
+        "targets": {
+          "default": "all",
+          "build": "go build -ldflags \"-X main.version=${VERSION}\" -o ${BINARY} ./cmd/deoxy",
+          "test": "go test ./... -v -count=1 -race",
+          "lint": "golangci-lint run ./... || go vet ./...",
+          "clean": "rm -f ${BINARY} ${BINARY}*.out coverage.out"
+        },
+        "notes": "PHONY declarations for all targets. Use the -ldflags approach to inject version at build time (links with P0-T1's version variable)."
+      },
+      "success_criteria": [
+        "Makefile exists at project root",
+        "make build produces a working binary at ./deoxy",
+        "make test passes",
+        "make clean removes the binary",
+        "make lint runs go vet (golangci-lint optional, no failure if missing)"
+      ]
+    },
+    {
+      "id": "P0-T5",
+      "title": "README.md — Project overview, install instructions, development guide",
+      "description": "A comprehensive README covering:\n- Project name and tagline (\"Multi-language documentation comment generator\")\n- Badges (build status placeholder, Go version, license)\n- Features overview (bullet list of what deoxy does — parsing, multi-language, templates, CLI + VS Code)\n- Quick start / installation (go install, download from releases, build from source)\n- Usage examples (stub — real CLI output once Phase 3 ships)\n- Development guide (prerequisites, building, testing, project structure)\n- Supported languages\n- Configuration (reference to .deoxy.yaml)\n- License section\n\nKeep placeholder sections for features that don't exist yet but mark them clearly.",
+      "file": "README.md",
+      "dependencies": ["P0-T1"],
+      "specification": {
+        "sections": [
+          "Title + Tagline + Badges",
+          "Features Overview (6-8 bullet points showing all planned capabilities)",
+          "Installation (go install + prebuilt binary paths)",
+          "Quick Start / Usage (stub — will be filled in Phase 3)",
+          "Supported Languages table",
+          "Development (prerequisites, `make build`, `make test`, project layout tree)",
+          "Configuration (.deoxy.yaml reference — stub)",
+          "License (MIT)",
+          "Contributing (one-liner)"
+        ]
+      },
+      "success_criteria": [
+        "README.md exists at project root",
+        "README.md is valid markdown (no broken syntax)",
+        "Covers all required sections",
+        "Contains the actual `go install` command with the module path",
+        "Badge placeholders use shields.io or similar (or plain-text stubs)"
+      ]
+    },
+    {
+      "id": "P0-T6",
+      "title": "LICENSE — MIT license file",
+      "description": "Standard MIT license with the project holder's name. Use the year 2026. The copyright holder should match whatever the user specifies (default: 'Piyush Harne' based on the module name 'piyuxh').",
+      "file": "LICENSE",
+      "dependencies": [],
+      "specification": {
+        "license": "MIT",
+        "year": 2026,
+        "holder": "Piyush Harne",
+        "rationale": "MIT is the standard permissive license for Go CLI tools, consistent with the project's open-source nature."
+      },
+      "success_criteria": [
+        "LICENSE file exists",
+        "Contains the MIT license text verbatim",
+        "Copyright year is 2026",
+        "Copyright holder name is correct"
+      ]
+    },
+    {
+      "id": "P0-T7",
+      "title": "CI workflow — GitHub Actions: lint, build, test on ubuntu/macos/windows",
+      "description": "A GitHub Actions workflow at .github/workflows/ci.yml that:\n- Triggers on push to main/master and on all pull requests\n- Builds matrix: OS (ubuntu-latest, macos-latest, windows-latest), Go version 1.26 (latest stable, matching go.mod's 1.26.3)\n- Steps: checkout, setup Go cache, run go vet, run go build ./..., run go test ./...\n- Does NOT install golangci-lint (keep it simple — go vet is sufficient for Phase 0)\n- Does NOT run any release steps (separate goreleaser workflow)\n- Does NOT cache Go build cache beyond the default setup-go caching\n- Does NOT depend on Makefile (use raw go commands for reliability on all platforms)\n\nUse the actions/setup-go@v5 action with go-version-file matching go.mod.",
+      "file": ".github/workflows/ci.yml",
+      "dependencies": ["P0-T1", "P0-T3"],
+      "specification": {
+        "trigger": ["push: [main, master]", "pull_request: [main, master]"],
+        "matrix": {
+          "os": ["ubuntu-latest", "macos-latest", "windows-latest"],
+          "go": ["1.26"]
+        },
+        "steps": [
+          "actions/checkout@v4",
+          "actions/setup-go@v5 with go-version-file: go.mod",
+          "go vet ./...",
+          "go build ./...",
+          "go test ./... -v -count=1"
+        ]
+      },
+      "success_criteria": [
+        ".github/workflows/ci.yml exists",
+        "Workflow triggers on push and pull_request",
+        "Runs on all three OS targets (ubuntu, macOS, windows)",
+        "Go version matches 1.26.x from go.mod",
+        "Steps execute in order: vet → build → test",
+        "Valid YAML (no syntax errors)"
+      ]
+    },
+    {
+      "id": "P0-T8",
+      "title": ".goreleaser.yaml — GoReleaser config for cross-compilation",
+      "description": "GoReleaser configuration file at project root for cross-compiling the deoxy binary to all target platforms. Must support:\n- OS: linux, darwin (macOS), windows\n- Arch: amd64, arm64\n- Use the standard GoReleaser defaults\n- Build from ./cmd/deoxy/main.go\n- Binary name: deoxy (deoxy.exe on Windows)\n- No release automation (no GitHub release config — that's added when releasing)\n- No extra files/archives beyond the binary\n- Version injected via -ldflags with -X main.version={{.Version}}\n- Use GoReleaser v2 config format (current as of 2026)\n\nThis config is the foundation that a future release workflow (Phase 4 or later) will use.",
+      "file": ".goreleaser.yaml",
+      "dependencies": ["P0-T1"],
+      "specification": {
+        "version": 2,
+        "project_name": "deoxy",
+        "builds": [
+          {
+            "id": "deoxy",
+            "main": "./cmd/deoxy",
+            "binary": "deoxy",
+            "ldflags": ["-X main.version={{.Version}}"],
+            "goos": ["linux", "darwin", "windows"],
+            "goarch": ["amd64", "arm64"],
+            "env": ["CGO_ENABLED=0"]
+          }
+        ],
+        "archives": {
+          "format": "tar.gz",
+          "format_overrides": [
+            {"goos": "windows", "format": "zip"}
+          ]
+        }
+      },
+      "success_criteria": [
+        ".goreleaser.yaml exists at project root",
+        "Valid YAML (no syntax errors)",
+        "Cross-compiles to all 6 target combinations (linux + darwin + windows × amd64 + arm64)",
+        "CGO_ENABLED=0 set for all targets",
+        "Version injection via ldflags matches main.go's version variable"
+      ]
+    }
+  ],
+  "execution_order": [
+    {"wave": 1, "tasks": ["P0-T1", "P0-T2", "P0-T6"], "rationale": "No dependencies — main.go, directory stubs, and LICENSE can all be created in parallel"},
+    {"wave": 2, "tasks": ["P0-T3", "P0-T5", "P0-T8"], "rationale": "P0-T3 needs directory structure (P0-T2), P0-T5 needs main.go (P0-T1) for install cmd, P0-T8 needs main.go for build config"},
+    {"wave": 3, "tasks": ["P0-T4", "P0-T7"], "rationale": "Makefile needs both main.go and tests; CI needs build + test to verify in CI"}
+  ],
+  "verification": [
+    {"step": "go build ./...", "expected": "exit code 0, no errors"},
+    {"step": "go vet ./...", "expected": "exit code 0, no warnings"},
+    {"step": "go test ./... -count=1", "expected": "exit code 0, at least 1 test run"},
+    {"step": "make build", "expected": "produces ./deoxy binary"},
+    {"step": "make test", "expected": "exit code 0"},
+    {"step": "make clean", "expected": "removes binary"},
+    {"step": "./deoxy", "expected": "prints 'deoxy v0.1.0' and exits 0"}
+  ],
+  "completion_state": {
+    "build_passes": true,
+    "tests_pass": true,
+    "ci_configured": true,
+    "release_config_ready": true,
+    "documentation_complete": true,
+    "project_licensed": true
+  }
+}
