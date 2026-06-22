@@ -6,21 +6,19 @@
   parameters: (parameters) @params
   return_type: (_)? @return) @func
 
-; Methods inside impl blocks
+; Methods inside impl blocks — function_item is inside declaration_list
 (impl_item
-  (function_item
-    name: (identifier) @name
-    parameters: (parameters) @params
-    return_type: (_)? @return) @method)
+  (declaration_list
+    (function_item
+      name: (identifier) @name
+      parameters: (parameters) @params
+      return_type: (_)? @return) @method))
 
 (struct_item
   name: (type_identifier) @name) @struct
 
 (trait_item
   name: (type_identifier) @name) @trait
-
-(impl_item
-  trait: (_)? @impl_trait) @impl
 
 (enum_item
   name: (type_identifier) @name) @enum

@@ -13,9 +13,11 @@
   result: (_)? @return) @method
 
 (type_declaration
-  (struct_type
-    name: (type_identifier) @name) @struct)
+  (type_spec
+    name: (type_identifier) @name
+    (struct_type)) @struct)
 
 (type_declaration
-  (interface_type
-    name: (type_identifier) @name) @interface)
+  (type_spec
+    name: (type_identifier) @name
+    (interface_type)) @interface)

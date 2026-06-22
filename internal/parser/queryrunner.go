@@ -84,14 +84,19 @@ func extractSymbolInfo(match *sitter.QueryMatch, q *sitter.Query, lang string, s
 		populateFromCaptures(&info, captures, lang, src)
 	}
 
-	// @method capture: methods (Rust, or explicit method capture)
+	// @method capture: methods (Go, Rust, or explicit method capture)
 	if _, ok := captures["method"]; ok {
 		hasTopCapture = true
 		info.Kind = symbol.KindMethod
 		populateFromCaptures(&info, captures, lang, src)
 
+		// Check for explicit @receiver capture (Go methods)
+		if receiverNode, ok := captures["receiver"]; ok {
+			info.Receiver = parseReceiver(receiverNode, lang, src)
+		}
+
 		// Detect method receiver (self param) — strip from params
-		if len(info.Params) > 0 {
+		if info.Receiver == nil && len(info.Params) > 0 {
 			first := info.Params[0]
 			if first.Name == "self" || first.Name == "&self" || first.Name == "&mut self" || first.Name == "self:" {
 				info.Receiver = &symbol.Param{Name: first.Name, Type: "Self"}
