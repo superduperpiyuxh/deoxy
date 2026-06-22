@@ -9,7 +9,7 @@
 ## Phases
 
 - [x] **Phase 0: Foundation** — Project scaffolding, module init, CI, README, directory structure
-- [ ] **Phase 1: Core Parser Engine** — Tree-sitter integration, language registry, query files, AST extraction
+- [x] **Phase 1: Core Parser Engine** — Tree-sitter integration, language registry, query files, AST extraction
 - [ ] **Phase 2: Template Engine** — Go text/template-based doc generation, per-language comment templates, config system
 - [ ] **Phase 3: CLI** — Cobra CLI with generate/init/watch commands, source injection, stdin/stdout mode
 - [ ] **Phase 4: VS Code Extension** — Thin TypeScript extension + Go sidecar via JSON-RPC over stdio
@@ -66,7 +66,7 @@
   - Do NOT attempt to extract doc comments from function bodies (e.g., `throw`/`raise` detection)
   - Do NOT handle all possible AST node types — start with functions, methods, structs, classes
   - Do NOT use `runtime.SetFinalizer` for CGo cleanup — always use explicit `Close()`
-**Plans**: TBD
+**Plans**: 1 (phase-1) ✅ Completed
 
 ---
 
@@ -221,7 +221,7 @@ Phase 5 depends on Phase 3 (needs CLI config) but not Phase 4 (works without VS 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 0. Foundation | 8/8 | ✅ Completed | 2026-06-22 |
-| 1. Core Parser Engine | 0/0 | Not started | - |
+| 1. Core Parser Engine | 14/14 | ✅ Completed | 2026-06-22 |
 | 2. Template Engine | 0/0 | Not started | - |
 | 3. CLI | 0/0 | Not started | - |
 | 4. VS Code Extension | 0/0 | Not started | - |
