@@ -295,6 +295,43 @@ languages:
 	}
 }
 
+func TestGetDocStyleWithUnknownLanguage(t *testing.T) {
+	cfg := LoadDefaultConfig()
+
+	// Unknown language should return the default DocStyle
+	style := cfg.GetDocStyle("nonexistent")
+	if style != DocStyleGoDoc {
+		t.Errorf("GetDocStyle for unknown lang should return default, got %v", style)
+	}
+}
+
+func TestGetLanguageConfigWithNilLanguages(t *testing.T) {
+	cfg := &Config{
+		DefaultDocStyle: "doxygen",
+		DefaultTagOrder: "brief-first",
+	}
+
+	// Should not panic when Languages is nil
+	langCfg := cfg.GetLanguageConfig("unknown")
+	if langCfg.DocStyle != "doxygen" {
+		t.Errorf("GetLanguageConfig with nil Languages should return DefaultDocStyle, got %v", langCfg.DocStyle)
+	}
+}
+
+func TestGetLanguageConfigWithEmptyLanguages(t *testing.T) {
+	cfg := &Config{
+		DefaultDocStyle: "godoc",
+		DefaultTagOrder: "brief-first",
+		Languages:       map[string]LanguageConfig{},
+	}
+
+	// Should not panic when Languages is empty
+	langCfg := cfg.GetLanguageConfig("go")
+	if langCfg.DocStyle != "godoc" {
+		t.Errorf("GetLanguageConfig with empty Languages should return defaults, got %v", langCfg.DocStyle)
+	}
+}
+
 func TestCustomTags(t *testing.T) {
 	content := `version: '1'
 languages:

@@ -259,6 +259,61 @@ func TestGenerateForce(t *testing.T) {
 	}
 }
 
+// TestGenerateWithConfigFlag tests that the --config flag is respected.
+func TestGenerateWithConfigFlag(t *testing.T) {
+	if os.Getenv("CGO_ENABLED") == "0" {
+		t.Skip("skipping test: CGO_ENABLED=0")
+	}
+	dir := t.TempDir()
+	src := "package test\n\nfunc Add(a int, b int) int {\n\treturn a + b\n}\n"
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte(src), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// Create a custom config
+	cfgContent := "version: '1'\ndefault_style: godoc\ndefault_tag_order: brief-first\n"
+	cfgPath := filepath.Join(dir, "custom.yaml")
+	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	output, err := runGenerate(t, []string{dir}, false, false, false, cfgPath)
+	if err != nil {
+		t.Fatalf("generate --config failed: %v", err)
+	}
+	_ = output
+
+	content, err := os.ReadFile(goFile)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	if !strings.Contains(string(content), "Add adds") {
+		t.Errorf("expected generated comment, got:\n%s", string(content))
+	}
+}
+
+// TestGenerateOnSingleFile tests generating doc comments for a single file (not directory).
+func TestGenerateOnSingleFile(t *testing.T) {
+	if os.Getenv("CGO_ENABLED") == "0" {
+		t.Skip("skipping test: CGO_ENABLED=0")
+	}
+	dir := t.TempDir()
+	src := "package test\n\nfunc Add(a int, b int) int {\n\treturn a + b\n}\n"
+	goFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(goFile, []byte(src), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	output, err := runGenerate(t, []string{goFile}, false, true, false, "")
+	if err != nil {
+		t.Fatalf("generate on single file failed: %v", err)
+	}
+	if !strings.Contains(output, "dry-run") {
+		t.Errorf("expected dry-run output, got: %s", output)
+	}
+}
+
 // TestGenerateSkipsExistingByDefault tests that existing comments are preserved.
 func TestGenerateSkipsExistingByDefault(t *testing.T) {
 	if os.Getenv("CGO_ENABLED") == "0" {

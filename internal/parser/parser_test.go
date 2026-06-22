@@ -705,6 +705,142 @@ func TestParseAllLanguagesSimultaneous(t *testing.T) {
 	}
 }
 
+func TestGetConfigForExtensionEdgeCases(t *testing.T) {
+	t.Run("case sensitivity", func(t *testing.T) {
+		_, ok := GetConfigForExtension(".GO")
+		if ok {
+			t.Error("expected .GO (uppercase) to not match")
+		}
+	})
+
+	t.Run(".h maps to C not C++", func(t *testing.T) {
+		cfg, ok := GetConfigForExtension(".h")
+		if !ok {
+			t.Fatal("expected .h to have a config")
+		}
+		if cfg.Name != "c" {
+			t.Errorf(".h should map to 'c', got %q", cfg.Name)
+		}
+	})
+
+	t.Run(".hpp maps to C++", func(t *testing.T) {
+		cfg, ok := GetConfigForExtension(".hpp")
+		if !ok {
+			t.Fatal("expected .hpp to have a config")
+		}
+		if cfg.Name != "cpp" {
+			t.Errorf(".hpp should map to 'cpp', got %q", cfg.Name)
+		}
+	})
+
+	t.Run("unknown extension returns false", func(t *testing.T) {
+		_, ok := GetConfigForExtension(".xyz")
+		if ok {
+			t.Error("expected .xyz to not match any language")
+		}
+	})
+
+	t.Run("empty extension returns false", func(t *testing.T) {
+		_, ok := GetConfigForExtension("")
+		if ok {
+			t.Error("expected empty extension to not match")
+		}
+	})
+}
+
+func TestManagerCloseIdempotent(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	err1 := manager.Close()
+	err2 := manager.Close()
+
+	if err1 != nil {
+		t.Errorf("first Close should not error, got: %v", err1)
+	}
+	if err2 != nil {
+		// Second close may error depending on implementation — that's OK
+		// The key is no panic or crash
+		t.Logf("second Close returned: %v (non-fatal)", err2)
+	}
+}
+
+func TestRunQueryEmptyContent(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	src := readFixture(t, fixturePath(t, "go", "sample.go"))
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	// Empty query content should not crash
+	results, err := RunQuery(tree, "", "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery with empty content should not error, got: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for empty query, got %d", len(results))
+	}
+}
+
+func TestRunQueryNoMatches(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	src := readFixture(t, fixturePath(t, "go", "comments_only.go"))
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	cfg, _ := GetLanguageConfig("go")
+	results, err := RunQuery(tree, cfg.QueryContent, "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery failed: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for comments-only file, got %d", len(results))
+	}
+}
+
+func TestParseEmptyGoFile(t *testing.T) {
+	manager, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer manager.Close()
+
+	// Minimal valid Go file with no symbols
+	src := []byte("package empty\n")
+	tree, err := manager.Parse("go", src)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	defer tree.Close()
+
+	cfg, _ := GetLanguageConfig("go")
+	results, err := RunQuery(tree, cfg.QueryContent, "go", src)
+	if err != nil {
+		t.Fatalf("RunQuery failed: %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Errorf("expected 0 symbols for empty file, got %d", len(results))
+	}
+}
+
 func TestParseGoNestedTypes(t *testing.T) {
 	manager, err := NewManager()
 	if err != nil {

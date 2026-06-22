@@ -274,44 +274,100 @@ func TestRenderGenericTypeParams(t *testing.T) {
 
 func TestBriefFunction(t *testing.T) {
 	tests := []struct {
-		name    string
+		label   string
+		funcName string
 		params  []symbol.Param
 		returns []string
 		want    []string // substrings that must appear
 		notWant []string // substrings that must NOT appear
 	}{
 		{
-			name:    "Add",
-			params:  []symbol.Param{{Name: "a", Type: "int"}, {Name: "b", Type: "int"}},
-			returns: []string{"int"},
-			want:    []string{"adds", "a", "b"},
+			label:    "Add",
+			funcName: "Add",
+			params:   []symbol.Param{{Name: "a", Type: "int"}, {Name: "b", Type: "int"}},
+			returns:  []string{"int"},
+			want:     []string{"adds", "a", "b"},
 		},
 		{
-			name:    "greet",
-			params:  []symbol.Param{{Name: "name", Type: "str"}, {Name: "age", Type: "int"}},
-			returns: []string{"str"},
-			want:    []string{"greets"},
+			label:    "greet",
+			funcName: "greet",
+			params:   []symbol.Param{{Name: "name", Type: "str"}, {Name: "age", Type: "int"}},
+			returns:  []string{"str"},
+			want:     []string{"greets"},
 		},
 		{
-			name:    "DoNothing",
-			params:  nil,
-			returns: nil,
-			// Smart camelCase splitting deferred to Phase 5
-			want:    []string{"doNothings"},
+			label:    "DoNothing",
+			funcName: "DoNothing",
+			params:   nil,
+			returns:  nil,
+			want:     []string{"doNothings"},
+		},
+		{
+			label:    "empty name",
+			funcName: "",
+			params:   nil,
+			returns:  nil,
+			want:     []string{""},
+		},
+		{
+			label:    "single char F",
+			funcName: "F",
+			params:   []symbol.Param{{Name: "x", Type: "int"}},
+			returns:  []string{"int"},
+			want:     []string{"fs", "x", "returns"},
+		},
+		{
+			label:    "name ending in s",
+			funcName: "Process",
+			params:   nil,
+			returns:  nil,
+			want:     []string{"process"},
+		},
+		{
+			label:    "name ending in ed",
+			funcName: "Need",
+			params:   nil,
+			returns:  nil,
+			want:     []string{"need"},
+		},
+		{
+			label:    "params no returns",
+			funcName: "Test",
+			params:   []symbol.Param{{Name: "a", Type: "int"}},
+			returns:  nil,
+			want:     []string{"tests", "a"},
+			notWant:  []string{"returns"},
+		},
+		{
+			label:    "returns no params",
+			funcName: "Test",
+			params:   nil,
+			returns:  []string{"int"},
+			want:     []string{"tests", "returns"},
+		},
+		{
+			label:    "multiple returns",
+			funcName: "Test",
+			params:   []symbol.Param{{Name: "a", Type: "int"}, {Name: "b", Type: "int"}},
+			returns:  []string{"int", "error"},
+			want:     []string{"a", "b", "returns"},
 		},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := brief(tt.name, tt.params, tt.returns)
+		t.Run(tt.label, func(t *testing.T) {
+			got := brief(tt.funcName, tt.params, tt.returns)
+			if tt.want[0] == "" && got != "" {
+				t.Errorf("brief(%q, ...) = %q, want empty string", tt.funcName, got)
+			}
 			for _, w := range tt.want {
-				if !strings.Contains(got, w) {
-					t.Errorf("brief(%q, ...) = %q, want it to contain %q", tt.name, got, w)
+				if w != "" && !strings.Contains(got, w) {
+					t.Errorf("brief(%q, ...) = %q, want it to contain %q", tt.funcName, got, w)
 				}
 			}
 			for _, nw := range tt.notWant {
 				if strings.Contains(got, nw) {
-					t.Errorf("brief(%q, ...) = %q, should NOT contain %q", tt.name, got, nw)
+					t.Errorf("brief(%q, ...) = %q, should NOT contain %q", tt.funcName, got, nw)
 				}
 			}
 		})
@@ -341,6 +397,53 @@ func TestParamDescFunction(t *testing.T) {
 			t.Errorf("paramDesc should contain param name, got: %q", got)
 		}
 	})
+
+	t.Run("generic param name uses ordinal fallback", func(t *testing.T) {
+		params := []symbol.Param{{Name: "a", Type: "int"}}
+		got := paramDesc(params, 0)
+		if !strings.Contains(got, "first") {
+			t.Errorf("generic param 'a' should use ordinal, got: %q", got)
+		}
+	})
+
+	t.Run("sixth param uses bare ordinal", func(t *testing.T) {
+		params := []symbol.Param{
+			{Name: "a", Type: "int"},
+			{Name: "b", Type: "int"},
+			{Name: "c", Type: "int"},
+			{Name: "d", Type: "int"},
+			{Name: "e", Type: "int"},
+			{Name: "f", Type: "int"},
+		}
+		got := paramDesc(params, 5)
+		if !strings.Contains(got, "the") {
+			t.Errorf("6th param should start with 'the', got: %q", got)
+		}
+	})
+
+	t.Run("negative ordinal returns empty", func(t *testing.T) {
+		params := []symbol.Param{{Name: "a", Type: "int"}}
+		got := paramDesc(params, -1)
+		if got != "" {
+			t.Errorf("negative ordinal should return empty, got: %q", got)
+		}
+	})
+
+	t.Run("ordinal beyond length returns empty", func(t *testing.T) {
+		params := []symbol.Param{{Name: "a", Type: "int"}}
+		got := paramDesc(params, 5)
+		if got != "" {
+			t.Errorf("out-of-bounds ordinal should return empty, got: %q", got)
+		}
+	})
+
+	t.Run("empty param name uses ordinal", func(t *testing.T) {
+		params := []symbol.Param{{Name: "", Type: "int"}}
+		got := paramDesc(params, 0)
+		if !strings.Contains(got, "first operand") {
+			t.Errorf("empty name should use ordinal, got: %q", got)
+		}
+	})
 }
 
 func TestReturnDescFunction(t *testing.T) {
@@ -364,6 +467,20 @@ func TestReturnDescFunction(t *testing.T) {
 			t.Errorf("multiple returns should include 'and', got: %q", got)
 		}
 	})
+
+	t.Run("three returns uses oxford comma", func(t *testing.T) {
+		got := returnDesc([]string{"int", "string", "error"})
+		if !strings.Contains(got, ", and") {
+			t.Errorf("three returns should use oxford comma, got: %q", got)
+		}
+	})
+
+	t.Run("single return includes type", func(t *testing.T) {
+		got := returnDesc([]string{"*Person"})
+		if !strings.Contains(got, "Person") {
+			t.Errorf("single return should include type, got: %q", got)
+		}
+	})
 }
 
 func TestJoinParams(t *testing.T) {
@@ -374,6 +491,8 @@ func TestJoinParams(t *testing.T) {
 		{[]symbol.Param{{Name: "a", Type: "int"}}, "a"},
 		{[]symbol.Param{{Name: "a", Type: "int"}, {Name: "b", Type: "int"}}, "a and b"},
 		{[]symbol.Param{{Name: "x", Type: "int"}, {Name: "y", Type: "int"}, {Name: "z", Type: "int"}}, "x, y, and z"},
+		{nil, ""},
+		{[]symbol.Param{}, ""},
 	}
 
 	for _, tt := range tests {

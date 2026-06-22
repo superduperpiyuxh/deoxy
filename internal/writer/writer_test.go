@@ -372,6 +372,349 @@ func TestBuildDirectivesPreserved(t *testing.T) {
 	}
 }
 
+func TestIsCommentLine(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"Go line comment", "// this is a comment", true},
+		{"Go line comment indented", "    // indented comment", true},
+		{"Go line comment no space", "//comment", true},
+		{"Rust doc comment", "/// doc comment", true},
+		{"Rust doc comment indented", "\t/// doc comment", true},
+		{"Python comment", "# this is a comment", true},
+		{"Python comment indented", "  # indented comment", true},
+		{"Python docstring double", "\"\"\"docstring\"\"\"", true},
+		{"Python docstring single", "'''docstring'''", true},
+		{"Block comment open", "/* block comment */", true},
+		{"Block comment open alone", "/*", true},
+		{"Block comment interior", "* interior line", true},
+		{"Block comment interior indented", " * interior", true},
+		{"Block comment close", "*/", true},
+		{"Non-comment code", "func Foo() {}", false},
+		{"Non-comment code indented", "    return x", false},
+		{"Empty line", "", false},
+		{"Whitespace only", "   ", false},
+		{"String literal", "\"// not a comment\"", false},
+		{"Python string", "'# not a comment'", false},
+		{"Star in string", "\"* not a comment\"", false},
+		{"Slash in identifier", "a//b", false},
+		{"Hash in string", "\"# not a comment\"", false},
+		{"Go build directive", "//go:build linux", false},
+		{"Go generate directive", "//go:generate stringer", false},
+		{"Go embed directive", "//go:embed schema.sql", false},
+		{"Old-style build tag", "// +build linux", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isCommentLine(tt.line)
+			if got != tt.want {
+				t.Errorf("isCommentLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindCommentBlock(t *testing.T) {
+	tests := []struct {
+		name        string
+		lines       []string
+		lineIdx     int
+		wantStart   int
+		wantEnd     int
+	}{
+		{
+			name: "single line Go comment above function",
+			lines: []string{
+				"// Foo is a function",
+				"func Foo() {}",
+			},
+			lineIdx:   1,
+			wantStart: 0,
+			wantEnd:   1,
+		},
+		{
+			name: "multi-line Go comment block",
+			lines: []string{
+				"// Foo is a function",
+				"// that does something",
+				"func Foo() {}",
+			},
+			lineIdx:   2,
+			wantStart: 0,
+			wantEnd:   2,
+		},
+		{
+			name: "multi-line block comment /* */",
+			lines: []string{
+				"/**",
+				" * @brief does a thing",
+				" */",
+				"int foo(void);",
+			},
+			lineIdx:   3,
+			wantStart: 0,
+			wantEnd:   3,
+		},
+		{
+			name: "comment with blank line between comment and symbol",
+			lines: []string{
+				"// Foo docs",
+				"",
+				"func Foo() {}",
+			},
+			lineIdx:   2,
+			wantStart: 0,
+			wantEnd:   1,
+		},
+		{
+			name: "comment with multiple blank lines between",
+			lines: []string{
+				"// Foo docs",
+				"",
+				"",
+				"func Foo() {}",
+			},
+			lineIdx:   3,
+			wantStart: 0,
+			wantEnd:   1,
+		},
+		{
+			name: "no comment at lineIdx 0",
+			lines: []string{
+				"func Foo() {}",
+			},
+			lineIdx:   0,
+			wantStart: -1,
+			wantEnd:   -1,
+		},
+		{
+			name: "no comment above",
+			lines: []string{
+				"package main",
+				"",
+				"func Foo() {}",
+			},
+			lineIdx:   2,
+			wantStart: -1,
+			wantEnd:   -1,
+		},
+		{
+			name: "non-comment code above (not a comment)",
+			lines: []string{
+				"var x = 1",
+				"func Foo() {}",
+			},
+			lineIdx:   1,
+			wantStart: -1,
+			wantEnd:   -1,
+		},
+		{
+			name: "build directive not treated as comment block",
+			lines: []string{
+				"//go:build linux",
+				"",
+				"package main",
+				"",
+				"func Foo() {}",
+			},
+			lineIdx:   4,
+			wantStart: -1,
+			wantEnd:   -1,
+		},
+		{
+			name: "comment with blank lines between paragraphs",
+			lines: []string{
+				"// paragraph one",
+				"// paragraph one continued",
+				"",
+				"// paragraph two",
+				"func Foo() {}",
+			},
+			lineIdx:   4,
+			wantStart: 0,
+			wantEnd:   4,
+		},
+		{
+			name: "Python docstring above function",
+			lines: []string{
+				"\"\"\"Does something.\"\"\"",
+				"def foo():",
+			},
+			lineIdx:   1,
+			wantStart: 0,
+			wantEnd:   1,
+		},
+		{
+			name: "Rust doc comment",
+			lines: []string{
+				"/// Foo does a thing",
+				"fn foo() {}",
+			},
+			lineIdx:   1,
+			wantStart: 0,
+			wantEnd:   1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, end := findCommentBlock(tt.lines, tt.lineIdx)
+			if start != tt.wantStart || end != tt.wantEnd {
+				t.Errorf("findCommentBlock() = (%d, %d), want (%d, %d)", start, end, tt.wantStart, tt.wantEnd)
+			}
+		})
+	}
+}
+
+func TestInsertCommentEdgeCases(t *testing.T) {
+	t.Run("empty comment string inserts blank line", func(t *testing.T) {
+		lines := []string{"func Foo() {}"}
+		got := insertComment(lines, 0, "", "")
+		if len(got) != 2 {
+			t.Errorf("expected 2 lines (empty comment + func), got %d: %v", len(got), got)
+		}
+	})
+
+	t.Run("insert at end of file", func(t *testing.T) {
+		lines := []string{"line1", "line2"}
+		got := insertComment(lines, 2, "// comment", "")
+		if len(got) != 4 {
+			t.Errorf("expected 4 lines (line1, line2, blank, comment), got %d: %v", len(got), got)
+		}
+		if got[3] != "// comment" {
+			t.Errorf("last line should be comment, got %q", got[3])
+		}
+	})
+
+	t.Run("insert at beginning of file", func(t *testing.T) {
+		lines := []string{"func Foo() {}"}
+		got := insertComment(lines, 0, "// comment", "")
+		if len(got) != 2 {
+			t.Errorf("expected 2 lines, got %d: %v", len(got), got)
+		}
+		if got[0] != "// comment" {
+			t.Errorf("first line should be comment, got %q", got[0])
+		}
+	})
+}
+
+func TestFromLinesEdgeCases(t *testing.T) {
+	t.Run("empty lines slice", func(t *testing.T) {
+		result := fromLines([]string{}, "\n", false)
+		if string(result) != "" {
+			t.Errorf("empty lines should produce empty string, got %q", string(result))
+		}
+	})
+
+	t.Run("empty lines with trailing newline", func(t *testing.T) {
+		result := fromLines([]string{}, "\n", true)
+		if string(result) != "\n" {
+			t.Errorf("expected just newline, got %q", string(result))
+		}
+	})
+
+	t.Run("single empty line", func(t *testing.T) {
+		result := fromLines([]string{""}, "\n", false)
+		if string(result) != "" {
+			t.Errorf("expected empty string, got %q", string(result))
+		}
+	})
+
+	t.Run("multiple empty lines", func(t *testing.T) {
+		result := fromLines([]string{"", "", ""}, "\n", false)
+		if string(result) != "\n\n" {
+			t.Errorf("expected \\n\\n, got %q", string(result))
+		}
+	})
+}
+
+func TestExtractIndentEdgeCases(t *testing.T) {
+	t.Run("only whitespace line", func(t *testing.T) {
+		got := extractIndent("    ")
+		if got != "    " {
+			t.Errorf("whitespace-only line should return full whitespace, got %q", got)
+		}
+	})
+
+	t.Run("tab only line", func(t *testing.T) {
+		got := extractIndent("\t")
+		if got != "\t" {
+			t.Errorf("tab-only line should return tab, got %q", got)
+		}
+	})
+
+	t.Run("unicode before code", func(t *testing.T) {
+		got := extractIndent("    // comment with → unicode")
+		if got != "    " {
+			t.Errorf("expected 4 spaces indent, got %q", got)
+		}
+	})
+}
+
+func TestHasExistingCommentEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		lines   []string
+		lineIdx int
+		want    bool
+	}{
+		{
+			name:    "build directive not a comment",
+			lines:   []string{"//go:build linux", "", "func Foo() {}"},
+			lineIdx: 2,
+			want:    false,
+		},
+		{
+			name:    "go generate directive not a comment",
+			lines:   []string{"//go:generate stringer", "", "func Foo() {}"},
+			lineIdx: 2,
+			want:    false,
+		},
+		{
+			name:    "code line not a comment",
+			lines:   []string{"var x = 1", "func Foo() {}"},
+			lineIdx: 1,
+			want:    false,
+		},
+		{
+			name:    "empty file returns false",
+			lines:   []string{},
+			lineIdx: 0,
+			want:    false,
+		},
+		{
+			name:    "negative lineIdx returns false",
+			lines:   []string{"func Foo() {}"},
+			lineIdx: -1,
+			want:    false,
+		},
+		{
+			name:    "Python triple single-quote docstring",
+			lines:   []string{"'''", "docstring", "'''", "def foo():"},
+			lineIdx: 3,
+			want:    true,
+		},
+		{
+			name:    "multi-line block comment",
+			lines:   []string{"/*", " * comment", " */", "int foo();"},
+			lineIdx: 3,
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasExistingComment(tt.lines, tt.lineIdx)
+			if got != tt.want {
+				t.Errorf("hasExistingComment(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCRLFPreserved(t *testing.T) {
 	dir := t.TempDir()
 

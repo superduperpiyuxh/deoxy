@@ -240,10 +240,23 @@ func (w *Writer) applyComments(filePath string, src []byte, comments []generator
 	return []FileEdit{edit}, nil
 }
 
+// isBuildDirective returns true for Go compiler directives (//go:build, //go:generate,
+// //go:embed, // +build) that start with // but are not doc comments.
+func isBuildDirective(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "//go:") ||
+		strings.HasPrefix(trimmed, "// +") ||
+		strings.HasPrefix(trimmed, "//export")
+}
+
 // isCommentLine returns true if the line is a doc comment line.
 // Supports Go (//), Rust (///), Python (#, """, '''), and C/C++ (/*, *, */) styles.
+// Excludes compiler directives like //go:build.
 func isCommentLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
+	if isBuildDirective(line) {
+		return false
+	}
 	return strings.HasPrefix(trimmed, "//") ||
 		strings.HasPrefix(trimmed, "#") ||
 		strings.HasPrefix(trimmed, "\"\"\"") ||

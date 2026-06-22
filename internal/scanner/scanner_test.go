@@ -192,3 +192,124 @@ func TestNonExistentDirectory(t *testing.T) {
 		t.Error("expected error for non-existent directory, got nil")
 	}
 }
+
+func TestByLanguageGrouping(t *testing.T) {
+	dir, cleanup := createTempDir(t)
+	defer cleanup()
+
+	files := map[string]string{
+		"main.go":  "package main\n",
+		"main.py":  "def foo(): pass\n",
+		"main.c":   "int main() { return 0; }\n",
+		"main.cpp": "int main() { return 0; }\n",
+		"main.rs":  "fn main() {}\n",
+	}
+
+	for name, content := range files {
+		writeFile(t, filepath.Join(dir, name), content)
+	}
+
+	result, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	expectedLangs := map[string]int{
+		"go":     1,
+		"python": 1,
+		"c":      1,
+		"cpp":    1,
+		"rust":   1,
+	}
+
+	for lang, expectedCount := range expectedLangs {
+		group, ok := result.ByLanguage[lang]
+		if !ok {
+			t.Errorf("expected language group %q in ByLanguage", lang)
+			continue
+		}
+		if len(group) != expectedCount {
+			t.Errorf("ByLanguage[%q] has %d files, want %d", lang, len(group), expectedCount)
+		}
+	}
+}
+
+func TestEmptyDirectory(t *testing.T) {
+	dir, cleanup := createTempDir(t)
+	defer cleanup()
+
+	result, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	if len(result.Files) != 0 {
+		t.Errorf("expected 0 files in empty directory, got %d", len(result.Files))
+	}
+	if len(result.ByLanguage) != 0 {
+		t.Errorf("expected 0 language groups in empty directory, got %d", len(result.ByLanguage))
+	}
+}
+
+func TestDirectoryWithOnlyUnsupportedFiles(t *testing.T) {
+	dir, cleanup := createTempDir(t)
+	defer cleanup()
+
+	writeFile(t, filepath.Join(dir, "main.js"), "console.log('hi');\n")
+	writeFile(t, filepath.Join(dir, "main.ts"), "console.log('hi');\n")
+	writeFile(t, filepath.Join(dir, "main.css"), "body {}\n")
+
+	result, err := Scan(dir)
+	if err != nil {
+		t.Fatalf("Scan failed: %v", err)
+	}
+
+	if len(result.Files) != 0 {
+		t.Errorf("expected 0 files for unsupported extensions, got %d", len(result.Files))
+	}
+}
+
+func TestScanWithExtensions(t *testing.T) {
+	dir, cleanup := createTempDir(t)
+	defer cleanup()
+
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n")
+	writeFile(t, filepath.Join(dir, "main.py"), "def foo(): pass\n")
+	writeFile(t, filepath.Join(dir, "main.c"), "int main() { return 0; }\n")
+
+	result, err := ScanWithExtensions([]string{dir}, []string{".go", ".py"})
+	if err != nil {
+		t.Fatalf("ScanWithExtensions failed: %v", err)
+	}
+
+	if len(result.Files) != 2 {
+		t.Errorf("expected 2 files (.go, .py), got %d", len(result.Files))
+	}
+
+	for _, f := range result.Files {
+		if f.Language != "go" && f.Language != "python" {
+			t.Errorf("unexpected language %q, expected 'go' or 'python'", f.Language)
+		}
+	}
+}
+
+func TestScanGoSpecificExtension(t *testing.T) {
+	dir, cleanup := createTempDir(t)
+	defer cleanup()
+
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n")
+	writeFile(t, filepath.Join(dir, "main.py"), "def foo(): pass\n")
+
+	result, err := ScanWithExtensions([]string{dir}, []string{".go"})
+	if err != nil {
+		t.Fatalf("ScanWithExtensions failed: %v", err)
+	}
+
+	if len(result.Files) != 1 {
+		t.Errorf("expected 1 file (.go only), got %d", len(result.Files))
+	}
+
+	if len(result.Files) > 0 && result.Files[0].Language != "go" {
+		t.Errorf("expected 'go' language, got %q", result.Files[0].Language)
+	}
+}

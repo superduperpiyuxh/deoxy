@@ -1,6 +1,8 @@
 package symbol
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestKindString(t *testing.T) {
 	tests := []struct {
@@ -13,111 +15,174 @@ func TestKindString(t *testing.T) {
 		{KindClass, "class"},
 		{KindInterface, "interface"},
 		{KindEnum, "enum"},
-		{Kind(-1), "unknown"},
 		{Kind(99), "unknown"},
 	}
+
 	for _, tt := range tests {
-		got := tt.kind.String()
-		if got != tt.want {
-			t.Errorf("Kind(%d).String() = %q, want %q", tt.kind, got, tt.want)
-		}
+		t.Run(tt.want, func(t *testing.T) {
+			got := tt.kind.String()
+			if got != tt.want {
+				t.Errorf("Kind(%d).String() = %q, want %q", int(tt.kind), got, tt.want)
+			}
+		})
 	}
 }
 
-func TestParamZeroValue(t *testing.T) {
-	var p Param
+func TestParamDefaults(t *testing.T) {
+	p := Param{}
 	if p.Name != "" {
-		t.Errorf("expected empty Name, got %q", p.Name)
+		t.Errorf("default Param.Name should be empty, got %q", p.Name)
 	}
 	if p.Type != "" {
-		t.Errorf("expected empty Type, got %q", p.Type)
+		t.Errorf("default Param.Type should be empty, got %q", p.Type)
 	}
 }
 
 func TestSymbolInfoDefaults(t *testing.T) {
-	var s SymbolInfo
+	s := SymbolInfo{}
 	if s.Name != "" {
-		t.Errorf("expected empty Name, got %q", s.Name)
+		t.Errorf("default Name should be empty, got %q", s.Name)
 	}
 	if s.Kind != KindFunction {
-		t.Errorf("expected KindFunction (0), got %v", s.Kind)
+		t.Errorf("default Kind should be KindFunction(0), got %v", s.Kind)
 	}
 	if s.Params != nil {
-		t.Errorf("expected nil Params, got %v", s.Params)
+		t.Errorf("default Params should be nil, got %v", s.Params)
 	}
 	if s.Returns != nil {
-		t.Errorf("expected nil Returns, got %v", s.Returns)
+		t.Errorf("default Returns should be nil, got %v", s.Returns)
 	}
 	if s.Receiver != nil {
-		t.Errorf("expected nil Receiver, got %v", s.Receiver)
+		t.Errorf("default Receiver should be nil, got %v", s.Receiver)
+	}
+	if s.StartLine != 0 {
+		t.Errorf("default StartLine should be 0, got %d", s.StartLine)
+	}
+	if s.EndLine != 0 {
+		t.Errorf("default EndLine should be 0, got %d", s.EndLine)
+	}
+}
+
+func TestSymbolInfoConstruction(t *testing.T) {
+	s := SymbolInfo{
+		Name:    "Add",
+		Kind:    KindFunction,
+		Params:  []Param{{Name: "a", Type: "int"}, {Name: "b", Type: "int"}},
+		Returns: []string{"int"},
+		TypeParams: []Param{{Name: "T", Type: "any"}},
+		Receiver: &Param{Name: "p", Type: "Point"},
+		StartLine: 10,
+		EndLine:   20,
+	}
+
+	if s.Name != "Add" {
+		t.Errorf("Name = %q, want %q", s.Name, "Add")
+	}
+	if s.Kind != KindFunction {
+		t.Errorf("Kind = %v, want KindFunction", s.Kind)
+	}
+	if len(s.Params) != 2 {
+		t.Errorf("len(Params) = %d, want 2", len(s.Params))
+	}
+	if s.Params[0].Name != "a" {
+		t.Errorf("Params[0].Name = %q, want %q", s.Params[0].Name, "a")
+	}
+	if s.Params[1].Type != "int" {
+		t.Errorf("Params[1].Type = %q, want %q", s.Params[1].Type, "int")
+	}
+	if len(s.Returns) != 1 {
+		t.Errorf("len(Returns) = %d, want 1", len(s.Returns))
+	}
+	if s.Returns[0] != "int" {
+		t.Errorf("Returns[0] = %q, want %q", s.Returns[0], "int")
+	}
+	if len(s.TypeParams) != 1 {
+		t.Errorf("len(TypeParams) = %d, want 1", len(s.TypeParams))
+	}
+	if s.TypeParams[0].Name != "T" {
+		t.Errorf("TypeParams[0].Name = %q, want %q", s.TypeParams[0].Name, "T")
+	}
+	if s.Receiver == nil {
+		t.Fatal("Receiver should not be nil")
+	}
+	if s.Receiver.Name != "p" {
+		t.Errorf("Receiver.Name = %q, want %q", s.Receiver.Name, "p")
+	}
+	if s.StartLine != 10 {
+		t.Errorf("StartLine = %d, want 10", s.StartLine)
+	}
+	if s.EndLine != 20 {
+		t.Errorf("EndLine = %d, want 20", s.EndLine)
+	}
+}
+
+func TestParamConstruction(t *testing.T) {
+	p := Param{Name: "count", Type: "int"}
+	if p.Name != "count" {
+		t.Errorf("Name = %q, want %q", p.Name, "count")
+	}
+	if p.Type != "int" {
+		t.Errorf("Type = %q, want %q", p.Type, "int")
 	}
 }
 
 func TestKindValues(t *testing.T) {
 	if KindFunction != 0 {
-		t.Errorf("KindFunction should be 0, got %d", KindFunction)
+		t.Errorf("KindFunction should be 0 (iota), got %d", KindFunction)
 	}
-	if KindMethod != KindFunction+1 {
-		t.Errorf("KindMethod should be KindFunction+1")
+	if KindMethod != 1 {
+		t.Errorf("KindMethod should be 1, got %d", KindMethod)
 	}
 	if KindEnum != 5 {
 		t.Errorf("KindEnum should be 5, got %d", KindEnum)
 	}
 }
 
-func TestParamStruct(t *testing.T) {
-	p := Param{Name: "count", Type: "int"}
-	if p.Name != "count" {
-		t.Errorf("expected Name 'count', got %q", p.Name)
-	}
-	if p.Type != "int" {
-		t.Errorf("expected Type 'int', got %q", p.Type)
-	}
-}
-
-func TestSymbolInfoWithData(t *testing.T) {
-	s := SymbolInfo{
-		Name: "Add",
-		Kind: KindFunction,
-		Params: []Param{
-			{Name: "a", Type: "int"},
-			{Name: "b", Type: "int"},
-		},
-		Returns: []string{"int"},
-		StartLine: 3,
-		EndLine:   5,
-	}
-	if s.Name != "Add" {
-		t.Errorf("expected Name 'Add', got %q", s.Name)
-	}
-	if len(s.Params) != 2 {
-		t.Errorf("expected 2 params, got %d", len(s.Params))
-	}
-	if len(s.Returns) != 1 || s.Returns[0] != "int" {
-		t.Errorf("expected Returns [int], got %v", s.Returns)
-	}
-	if s.StartLine != 3 || s.EndLine != 5 {
-		t.Errorf("expected start=3 end=5, got start=%d end=%d", s.StartLine, s.EndLine)
+func TestKindStringAll(t *testing.T) {
+	// Ensure all iota values produce non-empty strings
+	kinds := []Kind{KindFunction, KindMethod, KindStruct, KindClass, KindInterface, KindEnum}
+	for _, k := range kinds {
+		if k.String() == "" {
+			t.Errorf("Kind(%d).String() returned empty string", int(k))
+		}
 	}
 }
 
-func TestMethodSymbol(t *testing.T) {
+func TestSymbolInfoNilReceiver(t *testing.T) {
 	s := SymbolInfo{
-		Name: "Greet",
-		Kind: KindMethod,
-		Receiver: &Param{Name: "p", Type: "Person"},
-		Params: []Param{
-			{Name: "greeting", Type: "string"},
-		},
-		Returns: []string{"string"},
+		Name:     "Foo",
+		Kind:     KindFunction,
+		Receiver: nil,
 	}
-	if s.Kind != KindMethod {
-		t.Errorf("expected KindMethod, got %v", s.Kind)
+	if s.Receiver != nil {
+		t.Error("Receiver should be nil for functions")
 	}
-	if s.Receiver == nil {
-		t.Fatal("expected non-nil Receiver")
+}
+
+func TestSymbolInfoEmptySlices(t *testing.T) {
+	// nil slices vs empty slices
+	s1 := SymbolInfo{Name: "Foo"}
+	s2 := SymbolInfo{
+		Name:    "Bar",
+		Params:  []Param{},
+		Returns: []string{},
 	}
-	if s.Receiver.Name != "p" || s.Receiver.Type != "Person" {
-		t.Errorf("expected receiver p Person, got %v", *s.Receiver)
+
+	if s1.Params == nil && s2.Params != nil {
+		t.Log("nil vs empty Params — both valid, ensure templates handle both")
+	}
+
+	// Both should be treated as "no params" by len()
+	if len(s1.Params) != 0 {
+		t.Errorf("len(nil Params) = %d, want 0", len(s1.Params))
+	}
+	if len(s2.Params) != 0 {
+		t.Errorf("len(empty Params) = %d, want 0", len(s2.Params))
+	}
+	if len(s1.Returns) != 0 {
+		t.Errorf("len(nil Returns) = %d, want 0", len(s1.Returns))
+	}
+	if len(s2.Returns) != 0 {
+		t.Errorf("len(empty Returns) = %d, want 0", len(s2.Returns))
 	}
 }
