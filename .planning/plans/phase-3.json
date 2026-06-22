@@ -1,0 +1,484 @@
+{
+  "phase": 3,
+  "name": "CLI",
+  "description": "Build the cobra CLI with generate, init, and watch commands, plus the Writer package for doc comment injection. The Writer handles existing-comment detection (//, ///, #, \"\"\", /** styles), force-overwrite mode with comment block replacement, CRLF/LF preservation, build directive preservation, and dry-run/diff-only preview modes. The CLI exposes --diff/-d, --dry-run, --force/-f, and --config/-c flags, plus deoxy init for .deoxy.yaml scaffolding and a skeleton deoxy watch for fsnotify-based file watching.",
+  "module": "github.com/superduperpiyuxh/deoxy",
+  "go_version": "1.26.3",
+  "anti_goals": [
+    "Do NOT build the VS Code extension sidecar (Phase 4)",
+    "Do NOT implement smart text / name inference (Phase 5 — getter/setter/ctor detection, name splitting)",
+    "Do NOT add AI-generated descriptions (out of scope permanently)",
+    "Do NOT implement full watch-mode regeneration (skeleton only — prints events, no regeneration callback)",
+    "Do NOT add stdin/stdout JSON-RPC mode for IDE integration (Phase 4)",
+    "Do NOT implement git-aware mode (Phase 5)",
+    "Do NOT add alignment formatting for @param tags (Phase 5)"
+  ],
+  "roadmap_success_criteria": [
+    "deoxy generate ./src finds all supported source files, generates doc comments, and writes them back in-place",
+    "deoxy generate --diff ./src shows proposed changes without modifying files",
+    "deoxy generate --dry-run ./src processes files but does not write any output",
+    "deoxy generate --force overwrites existing doc comments with regenerated ones",
+    "deoxy init creates a .deoxy.yaml config file with sensible defaults",
+    "deoxy watch ./src prints fsnotify events (skeleton; no regeneration callback yet)",
+    "Generated Go files parse correctly after comment insertion (no syntax errors)",
+    "Existing comments are detected and respected (skip mode by default; --force overwrites)",
+    "Build directives (//go:build, //go:generate) are not broken by comment insertion",
+    "Original line endings (LF/CRLF) are preserved in output"
+  ],
+  "tasks": [
+    {
+      "id": "P3-T1",
+      "title": "Create internal/writer/writer.go — Writer struct with comment injection logic",
+      "description": "Build the Writer package that takes generated doc comments from the generator pipeline and injects them into source files. Core capabilities: detect existing comments above a symbol line (hasExistingComment), find the full extent of an existing comment block for force-overwrite (findCommentBlock), insert new comment text with proper indentation (insertComment), split/join source lines with LF/CRLF preservation (toLines/fromLines), and orchestrate the full apply-modify-write cycle (applyComments). Writer supports three modes: normal (write to disk), dry-run (compute edits but don't write), and diff-only (compute modified content for display but don't write).",
+      "file": "internal/writer/writer.go",
+      "dependencies": [],
+      "specification": {
+        "package": "writer",
+        "imports": [
+          "bytes",
+          "fmt",
+          "os",
+          "sort",
+          "strings",
+          "github.com/superduperpiyuxh/deoxy/internal/generator",
+          "github.com/superduperpiyuxh/deoxy/internal/scanner"
+        ],
+        "types": {
+          "FileEdit": {
+            "description": "A set of insertions to make in a single file.",
+            "fields": [
+              {"name": "FilePath", "type": "string"},
+              {"name": "Insertions", "type": "[]Insertion"},
+              {"name": "Original", "type": "[]byte", "comment": "Original file content for diff calculation"},
+              {"name": "Modified", "type": "[]byte", "comment": "Content after all insertions (nil if no changes)"}
+            ]
+          },
+          "Insertion": {
+            "description": "A single doc comment to insert before a symbol.",
+            "fields": [
+              {"name": "Line", "type": "int", "comment": "0-indexed line number to insert BEFORE"},
+              {"name": "Content", "type": "string", "comment": "The doc comment to insert"},
+              {"name": "SymbolName", "type": "string", "comment": "For logging"}
+            ]
+          },
+          "Writer": {
+            "description": "Manages the process of injecting doc comments into source files.",
+            "fields": [
+              {"name": "gen", "type": "*generator.Generator"},
+              {"name": "force", "type": "bool"},
+              {"name": "diffOnly", "type": "bool"},
+              {"name": "dryRun", "type": "bool"}
+            ],
+            "methods": [
+              "func New(gen *generator.Generator, force, diffOnly, dryRun bool) *Writer",
+              "func (w *Writer) Generate(filePath string) ([]FileEdit, error) — process single file",
+              "func (w *Writer) GenerateDir(dirPath string) ([]FileEdit, error) — process directory",
+              "func (w *Writer) GenerateAll(scanResult *scanner.Result) ([]FileEdit, error) — process all from scanner"
+            ]
+          }
+        },
+        "key_functions": {
+          "hasExistingComment": {
+            "signature": "hasExistingComment(lines []string, lineIdx int) bool",
+            "behavior": "Scans upward from lineIdx-1, skipping blank lines. Returns true if a comment line is found (detects //, ///, #, \"\"\", ''', /*, *, */ prefixes)."
+          },
+          "findCommentBlock": {
+            "signature": "findCommentBlock(lines []string, lineIdx int) (int, int)",
+            "behavior": "Finds the full contiguous comment block above the given line. Returns (startLine, endLine) inclusive-exclusive range. Only called when force=true to determine what to remove before inserting the new comment."
+          },
+          "insertComment": {
+            "signature": "insertComment(lines []string, lineIdx int, comment string, indent string) []string",
+            "behavior": "Inserts a doc comment before lineIdx with the given indentation. Adds a leading blank line if the line above the insertion point is not empty. Returns new slice with comment inserted."
+          },
+          "toLines": {
+            "signature": "toLines(src []byte) (lines []string, sep string, trailingNewline bool)",
+            "behavior": "Splits source bytes into lines, detecting LF vs CRLF separator, and noting whether the source ended with a trailing newline."
+          },
+          "fromLines": {
+            "signature": "fromLines(lines []string, sep string, trailingNewline bool) []byte",
+            "behavior": "Joins lines back with the detected separator, restoring trailing newline if original had one."
+          },
+          "extractIndent": {
+            "signature": "extractIndent(line string) string",
+            "behavior": "Returns the leading whitespace (spaces/tabs) of the given line."
+          }
+        },
+        "insertion_ordering": {
+          "description": "applyComments sorts insertions by StartLine descending (bottom-up) so that earlier insertions don't change line offsets for later ones. When force=true and an existing comment block is found, the block is removed first, then the new comment is inserted. The StartLine for subsequent insertions is adjusted by the number of lines removed."
+        },
+        "error_handling": {
+          "file_not_found": "Generate returns error if file path does not exist",
+          "parse_error": "Generate returns error with file path context if generator.Parse fails",
+          "write_failure": "applyComments returns error if os.WriteFile fails",
+          "directory_scan": "GenerateDir wraps scanner.Scan errors with context"
+        },
+        "rationale": "Writer is the final stage of the deoxy pipeline. Bottom-up insertion (sorting descending by StartLine) is essential to maintain correct line offsets as insertions shift subsequent lines. The toLines/fromLines roundtrip preserves exact line endings and trailing newlines for minimal diff noise. hasExistingComment and findCommentBlock are split into two functions for clarity: the first is a boolean check for the skip-existing default, the second computes the exact range for force-overwrite removal."
+      },
+      "success_criteria": [
+        "Writer accepts a generator.Generator and produces FileEdit results",
+        "hasExistingComment detects Go (//), Rust (///), Python (#), Python docstrings (\"\"\"/'''), and block comments (/**/)",
+        "hasExistingComment returns false when no comment exists above the target line",
+        "findCommentBlock returns correct inclusive-exclusive range for contiguous comment blocks",
+        "findCommentBlock returns (-1,-1) when no comment exists (non-force path doesn't call it)",
+        "insertComment inserts comment at correct position with proper indentation",
+        "insertComment adds leading blank line when preceding line is non-empty",
+        "toLines/fromLines roundtrip preserves LF and CRLF line endings",
+        "toLines/fromLines preserves trailing newline status",
+        "Build directives (//go:build) before functions are preserved after insertion",
+        "go vet ./internal/writer/ passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P3-T2",
+      "title": "Create internal/writer/writer_test.go — Writer test suite",
+      "description": "Write comprehensive tests for the Writer package covering all core functions and edge cases. Tests use table-driven patterns, parallel subtests, and real fixture files for integration scenarios.",
+      "file": "internal/writer/writer_test.go",
+      "dependencies": ["P3-T1"],
+      "specification": {
+        "package": "writer",
+        "imports": [
+          "os",
+          "path/filepath",
+          "strings",
+          "testing",
+          "github.com/superduperpiyuxh/deoxy/internal/symbol"
+        ],
+        "test_cases": [
+          {
+            "name": "TestInsertComment",
+            "subtests": [
+              {"name": "simple", "desc": "Insert single-line comment at line 0"},
+              {"name": "indented", "desc": "Insert comment at indented function"},
+              {"name": "multi-line", "desc": "Insert multi-line comment"},
+              {"name": "leading-blank", "desc": "Leading blank line added when line above non-empty"},
+              {"name": "leading-blank-indented", "desc": "Leading blank line with indented target"}
+            ]
+          },
+          {
+            "name": "TestHasExistingComment",
+            "subtests": [
+              {"name": "no-comment", "desc": "No comment above function"},
+              {"name": "go-comment", "desc": "Go // style comment detected"},
+              {"name": "rust-comment", "desc": "Rust /// style comment detected"},
+              {"name": "block-comment", "desc": "/* block comment detected"},
+              {"name": "python-docstring", "desc": "Python \"\"\" docstring detected"},
+              {"name": "python-inline-comment", "desc": "Python # comment detected"},
+              {"name": "with-blank-lines", "desc": "Blank lines between comment and symbol"},
+              {"name": "lineidx-zero", "desc": "Function at line 0 has no comment"}
+            ]
+          },
+          {
+            "name": "TestExtractIndent",
+            "subtests": [
+              {"name": "no-indent", "desc": "Line with no leading whitespace"},
+              {"name": "spaces", "desc": "Line with 4-space indent"},
+              {"name": "tab", "desc": "Line with tab indent"},
+              {"name": "many-spaces", "desc": "Line with 8-space indent"},
+              {"name": "empty", "desc": "Empty line returns empty string"},
+              {"name": "mixed", "desc": "Line with mixed spaces and tabs"}
+            ]
+          },
+          {
+            "name": "TestToLinesAndFromLines",
+            "subtests": [
+              {"name": "lf-no-trailing", "desc": "LF line endings, no trailing newline"},
+              {"name": "lf-trailing", "desc": "LF with trailing newline"},
+              {"name": "crlf-no-trailing", "desc": "CRLF, no trailing"},
+              {"name": "crlf-trailing", "desc": "CRLF with trailing newline"},
+              {"name": "empty", "desc": "Empty source returns empty"},
+              {"name": "single-line", "desc": "Single line without newline"}
+            ]
+          },
+          {
+            "name": "TestIntegrationInsertAndDetect",
+            "description": "Full integration: insert comment into Go source, then verify hasExistingComment detects it",
+            "assertions": [
+              "Inserted comment is detected by hasExistingComment",
+              "Content roundtrips correctly through toLines/fromLines",
+              "Insertion preserves surrounding code structure"
+            ]
+          },
+          {
+            "name": "TestBuildDirectivesPreserved",
+            "description": "Build directives (//go:build, //go:generate) before the function are preserved after comment insertion",
+            "assertions": [
+              "Build directive lines remain before the function",
+              "The order is: build directive, blank line, doc comment, blank line, function",
+              "No build directive lines are consumed by comment insertion"
+            ]
+          },
+          {
+            "name": "TestCRLFPreserved",
+            "description": "CRLF line endings are preserved through the full write cycle",
+            "assertions": [
+              "Output bytes contain \\r\\n line endings",
+              "Trailing newline is preserved",
+              "Comment lines use CRLF to match source"
+            ]
+          }
+        ],
+        "test_data": "Tests use inline test data constructed in test functions. Integration tests create temp files in t.TempDir() for isolation."
+      },
+      "success_criteria": [
+        "All 9 test functions with 29+ subtests pass",
+        "TestInsertComment covers: simple, indented, multi-line, leading blank line scenarios",
+        "TestHasExistingComment covers all 5 comment styles plus blank line and edge cases",
+        "TestToLinesAndFromLines covers LF/CRLF with/without trailing newline",
+        "Integration test verifies detect-after-insert roundtrip",
+        "Build directive preservation test verifies //go:build, //go:generate before function",
+        "CRLF preservation test verifies roundtrip through full write cycle"
+      ]
+    },
+    {
+      "id": "P3-T3",
+      "title": "Create cmd/deoxy/cmd/ — Cobra root command with generate, init, watch subcommands",
+      "description": "Build the cobra CLI with root command (deoxy), generate (deoxy generate [path...]), init (deoxy init [dir]), and watch (deoxy watch [path...]) subcommands. The root command shows project description and version. Generate accepts --diff/-d, --dry-run, --force/-f, --config/-c flags. Init scaffolds .deoxy.yaml. Watch is a skeleton that uses fsnotify to print file events. All commands use RunE returning nil for silent-completion (no cobra default help output). Output uses cmd.Printf/cmd.Println for proper test capture through cobra's output chain.",
+      "file": "cmd/deoxy/cmd/{root,generate,init,watch}.go",
+      "dependencies": ["P3-T1"],
+      "specification": {
+        "package": "cmd",
+        "imports": [
+          "fmt",
+          "os",
+          "github.com/spf13/cobra",
+          "github.com/fsnotify/fsnotify",
+          "github.com/superduperpiyuxh/deoxy/internal/config",
+          "github.com/superduperpiyuxh/deoxy/internal/generator",
+          "github.com/superduperpiyuxh/deoxy/internal/writer"
+        ],
+        "commands": {
+          "root": {
+            "use": "deoxy",
+            "short": "Multi-language doc comment generator",
+            "long": "deoxy generates doc comments for multiple programming languages using tree-sitter AST analysis.",
+            "persistent_flags": [],
+            "behavior": "Prints help by default (RunE delegates to help). RunE returns nil for silent completion."
+          },
+          "generate": {
+            "use": "generate [path...]",
+            "short": "Generate doc comments for source files",
+            "flags": [
+              {"name": "diff", "short": "d", "type": "bool", "default": false, "usage": "Show diff of changes without writing"},
+              {"name": "dry-run", "type": "bool", "default": false, "usage": "Process files but do not write"},
+              {"name": "force", "short": "f", "type": "bool", "default": false, "usage": "Overwrite existing doc comments"},
+              {"name": "config", "short": "c", "type": "string", "default": ".deoxy.yaml", "usage": "Path to config file"}
+            ],
+            "behavior": "For each path: if directory, recursively discover source files; else process single file. Runs generator pipeline (config → scan → parse → render), then writer for injection. Reports summary with file count, symbol count, error count."
+          },
+          "init": {
+            "use": "init [dir]",
+            "short": "Scaffold a .deoxy.yaml config file",
+            "args": "cobra.MaximumNArgs(1)",
+            "behavior": "Creates .deoxy.yaml in the specified directory (or current directory) with default config. Errors if file already exists."
+          },
+          "watch": {
+            "use": "watch [path...]",
+            "short": "[experimental] Watch files for changes and regenerate docs",
+            "behavior": "Skeleton implementation: uses fsnotify to watch paths, prints created/written/removed events. No regeneration callback yet."
+          }
+        },
+        "file_updates": {
+          "main.go": "Updated to call cmd.Execute() instead of printing version string.",
+          "main_test.go": "Updated to test cobra-based entry point."
+        },
+        "output_pattern": "All commands use cmd.Printf/cmd.Println instead of fmt.Printf so output routes through cobra's output chain for test capture via rootCmd.SetOut(buf)."
+      },
+      "success_criteria": [
+        "deoxy --help shows root help with subcommand listing",
+        "deoxy generate --help shows all 4 flags (--diff, --dry-run, --force, --config)",
+        "deoxy init --help shows usage with optional directory argument",
+        "deoxy init creates .deoxy.yaml with default config",
+        "deoxy init fails with error if .deoxy.yaml already exists",
+        "deoxy init fails with error for non-existent directory",
+        "deoxy generate processes files and produces output",
+        "All cobra commands use RunE returning nil (no default help output)",
+        "go vet ./cmd/deoxy/... passes with zero warnings"
+      ]
+    },
+    {
+      "id": "P3-T4",
+      "title": "Update go.mod/go.sum — Add cobra and fsnotify dependencies",
+      "description": "Add github.com/spf13/cobra and github.com/fsnotify/fsnotify as direct dependencies. Run go mod tidy to clean up go.sum. Verify no dependency conflicts.",
+      "file": "go.mod, go.sum",
+      "dependencies": [],
+      "specification": {
+        "dependencies": {
+          "cobra": "github.com/spf13/cobra v1.10.2 — CLI framework",
+          "fsnotify": "github.com/fsnotify/fsnotify v1.10.1 — File system watcher"
+        },
+        "rationale": "Cobra is the de facto standard Go CLI framework. Fsnotify is the standard cross-platform file watcher (used by air, reflex, and other Go dev tools). Both are mature, well-maintained libraries with zero transitive dependency conflicts."
+      },
+      "success_criteria": [
+        "go.mod contains cobra and fsnotify as direct dependencies",
+        "go.sum is populated after go mod tidy",
+        "go build ./... succeeds with all dependencies resolved"
+      ]
+    },
+    {
+      "id": "P3-T5",
+      "title": "Create cmd/deoxy/cmd/generate_test.go — CLI command tests",
+      "description": "Write tests for the cobra CLI commands. Uses cobra's direct RunE invocation pattern to avoid global flag state pollution across test functions. Covers: help output for all commands, init functional tests (creates config, fails if exists, fails for non-existent dir), and generate integration tests (dry-run preserves files, diff shows changes without writing, force overwrites existing comments, skip existing by default).",
+      "file": "cmd/deoxy/cmd/generate_test.go",
+      "dependencies": ["P3-T3"],
+      "specification": {
+        "package": "cmd",
+        "test_cases": [
+          {
+            "name": "TestRootHelp",
+            "description": "Verify root command help output",
+            "assertions": ["Output contains 'deoxy'", "Output contains 'generate'", "Output contains 'init'", "Output contains 'watch'"]
+          },
+          {
+            "name": "TestGenerateHelp",
+            "description": "Verify generate command help output",
+            "assertions": ["Output contains 'deoxy generate'", "Output contains '--diff'", "Output contains '--dry-run'", "Output contains '--force'", "Output contains '--config'"]
+          },
+          {
+            "name": "TestInitHelp",
+            "description": "Verify init command help output",
+            "assertions": ["Output contains 'deoxy init'", "Output contains '[dir]'"]
+          },
+          {
+            "name": "TestWatchHelp",
+            "description": "Verify watch command help output",
+            "assertions": ["Output contains 'deoxy watch'", "Output contains '[experimental]'"]
+          },
+          {
+            "name": "TestInitCreatesConfig",
+            "description": "Init creates .deoxy.yaml in temp directory",
+            "assertions": ["File is created at correct path", "File contains valid YAML", "File parses as valid config"]
+          },
+          {
+            "name": "TestInitFailsIfExists",
+            "description": "Init fails when .deoxy.yaml already exists",
+            "assertions": ["Error is returned", "Error message mentions 'already exists'"]
+          },
+          {
+            "name": "TestInitFailsWithNonExistentDir",
+            "description": "Init fails for non-existent directory",
+            "assertions": ["Error is returned", "Error message mentions directory or path"]
+          },
+          {
+            "name": "TestGenerateWithNonexistentPath",
+            "description": "Generate returns error for non-existent file path",
+            "assertions": ["Error is returned", "Error message mentions the path"]
+          },
+          {
+            "name": "TestGenerateDryRun",
+            "description": "Generate --dry-run processes but does not write",
+            "assertions": ["Output contains warning that file was skipped or not written", "Source file content is unchanged after run"]
+          },
+          {
+            "name": "TestGenerateDiff",
+            "description": "Generate --diff shows changes without writing",
+            "assertions": ["Output contains '+' lines (added comments)", "Source file content is unchanged after run"]
+          },
+          {
+            "name": "TestGenerateForce",
+            "description": "Generate --force overwrites existing doc comments",
+            "assertions": ["Old comment text is no longer in file", "New comment text is present", "File is modified on disk"]
+          },
+          {
+            "name": "TestGenerateSkipsExistingByDefault",
+            "description": "Generate without --force skips symbols with existing comments",
+            "assertions": ["Existing comment text remains unchanged", "Function with existing comment is not modified"]
+          }
+        ],
+        "test_pattern": "Direct RunE invocation: set global flag variables, call generateCmd.RunE(cmd, args), capture output via rootCmd.SetOut(buf). Ensures no cobra global state pollution across test functions."
+      },
+      "success_criteria": [
+        "All 11 test functions pass with go test ./cmd/deoxy/cmd/ -v -count=1",
+        "Help output tests verify all 4 commands produce expected content",
+        "Init tests cover: create, fail-if-exists, fail-on-nonexistent-dir",
+        "Generate tests cover: nonexistent path, dry-run, diff, force, skip-existing",
+        "Tests use direct RunE pattern (not rootCmd.Execute())",
+        "No flag state pollution across test functions"
+      ]
+    },
+    {
+      "id": "P3-T6",
+      "title": "Writer force-overwrite mode and cmd output routing fixes",
+      "description": "Implement missing force-overwrite mode in Writer (findCommentBlock, applyComments for removal before insertion) and fix cmd output routing by switching from fmt.Printf to cmd.Printf for proper test capture. Also fix indented comment test expectation for leading blank line behavior.",
+      "file": "internal/writer/writer.go, internal/writer/writer_test.go, cmd/deoxy/cmd/generate.go",
+      "dependencies": ["P3-T1", "P3-T3"],
+      "specification": {
+        "fixes": [
+          {
+            "issue": "Force-overwrite mode not implemented",
+            "fix": "Add findCommentBlock to detect contiguous comment block extent; modify applyComments to remove old block before inserting new comment",
+            "changed_files": ["internal/writer/writer.go"]
+          },
+          {
+            "issue": "fmt.Printf output not captured in tests",
+            "fix": "Replace fmt.Printf/fmt.Println with cmd.Printf/cmd.Println in generate.go",
+            "changed_files": ["cmd/deoxy/cmd/generate.go"]
+          },
+          {
+            "issue": "Indented comment test expected wrong output",
+            "fix": "Update test expectation to include leading blank line (insertComment always adds one when adjacent to non-empty code)",
+            "changed_files": ["internal/writer/writer_test.go"]
+          }
+        ]
+      },
+      "success_criteria": [
+        "TestGenerateForce passes: --force overwrites existing comments",
+        "TestGenerateDiff captures output via cmd buffer instead of stdout",
+        "All writer tests pass with corrected expectations",
+        "go vet passes with zero warnings"
+      ]
+    }
+  ],
+  "execution_order": [
+    {
+      "wave": 1,
+      "tasks": ["P3-T1", "P3-T4"],
+      "rationale": "Writer package (P3-T1) is the core of Phase 3 with no Go dependency on other Phase 3 tasks. Dependency update (P3-T4) is independent — go get cobra/fsnotify doesn't depend on any code changes."
+    },
+    {
+      "wave": 2,
+      "tasks": ["P3-T2", "P3-T3"],
+      "rationale": "Writer tests (P3-T2) depend on writer.go. Cobra CLI commands (P3-T3) depend on the Writer package and are new files in cmd/deoxy/cmd/. Both can be built in parallel."
+    },
+    {
+      "wave": 3,
+      "tasks": ["P3-T5", "P3-T6"],
+      "rationale": "Cmd tests (P3-T5) depend on CLI commands (P3-T3) being complete. Force-overwrite and cmd output routing fixes (P3-T6) depend on understanding what's missing from both Writer and CLI — these are post-implementation fixes discovered during testing."
+    }
+  ],
+  "verification": [
+    {"step": "CGO_ENABLED=1 go build ./...", "expected": "exit code 0, all packages compile with tree-sitter + cobra CGo bindings"},
+    {"step": "CGO_ENABLED=1 go vet ./...", "expected": "exit code 0, zero warnings across all packages"},
+    {"step": "CGO_ENABLED=1 go test ./... -count=1", "expected": "exit code 0, all 10 packages pass (including 9 writer test funcs with 29 subtests, 11 cmd test funcs)"},
+    {"step": "deoxy --help", "expected": "shows root help with generate, init, watch subcommands"},
+    {"step": "deoxy generate --help", "expected": "shows all 4 flags (--diff, --dry-run, --force, --config)"},
+    {"step": "deoxy init --help", "expected": "shows init usage with optional directory argument"},
+    {"step": "deoxy init creates .deoxy.yaml", "expected": "file exists with default config and parses correctly"},
+    {"step": "deoxy generate --dry-run preserves files", "expected": "source files unchanged after run"},
+    {"step": "deoxy generate --diff shows changes", "expected": "diff output contains '+' lines without modifying files"},
+    {"step": "deoxy generate --force overwrites", "expected": "old comment replaced with new comment"},
+    {"step": "deoxy generate (no flag) skips existing", "expected": "existing comments preserved"},
+    {"step": "CRLF preserved", "expected": "CRLF line endings survive roundtrip through writer"},
+    {"step": "Build directives preserved", "expected": "//go:build, //go:generate lines survive comment insertion"}
+  ],
+  "completion_state": {
+    "go_build_passes": true,
+    "go_vet_passes": true,
+    "go_test_passes": true,
+    "writer_has_existing_comment_detection": true,
+    "writer_find_comment_block_works": true,
+    "writer_insert_comment_works": true,
+    "writer_crlf_preserved": true,
+    "writer_build_directives_preserved": true,
+    "cli_generate_command_works": true,
+    "cli_generate_diff_flag_works": true,
+    "cli_generate_dry_run_flag_works": true,
+    "cli_generate_force_flag_works": true,
+    "cli_generate_config_flag_works": true,
+    "cli_init_command_works": true,
+    "cli_watch_command_skeleton": true,
+    "existing_comments_skipped_by_default": true,
+    "force_overwrite_replaces_existing": true,
+    "cmd_output_captured_in_tests": true,
+    "no_flag_state_pollution_across_tests": true
+  }
+}

@@ -240,6 +240,19 @@ func (w *Writer) applyComments(filePath string, src []byte, comments []generator
 	return []FileEdit{edit}, nil
 }
 
+// isCommentLine returns true if the line is a doc comment line.
+// Supports Go (//), Rust (///), Python (#, """, '''), and C/C++ (/*, *, */) styles.
+func isCommentLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "//") ||
+		strings.HasPrefix(trimmed, "#") ||
+		strings.HasPrefix(trimmed, "\"\"\"") ||
+		strings.HasPrefix(trimmed, "'''") ||
+		strings.HasPrefix(trimmed, "/*") ||
+		strings.HasPrefix(trimmed, "*") ||
+		strings.HasPrefix(trimmed, "*/")
+}
+
 // hasExistingComment checks whether there is already a doc comment above the
 // given line index. It looks backwards from lineIdx, skipping blank lines,
 // and returns true if a comment line is found.
@@ -249,96 +262,38 @@ func hasExistingComment(lines []string, lineIdx int) bool {
 	}
 
 	i := lineIdx - 1
-	// Skip blank lines
 	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
 		i--
 	}
 
-	if i < 0 {
-		return false
-	}
-
-	trimmed := strings.TrimSpace(lines[i])
-
-	// Check for line comment styles
-	if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "#") {
-		return true
-	}
-
-	// Check for Rust doc comments
-	if strings.HasPrefix(trimmed, "///") {
-		return true
-	}
-
-	// Check for Python docstrings
-	if strings.HasPrefix(trimmed, "\"\"\"") || strings.HasPrefix(trimmed, "'''") {
-		return true
-	}
-
-	// Check for block comment closing /* */
-	if strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") || strings.HasPrefix(trimmed, "*/") {
-		return true
-	}
-
-	return false
+	return i >= 0 && isCommentLine(lines[i])
 }
 
 // findCommentBlock finds the range of an existing comment block above the given
 // line index. Returns (startLine, endLine) where startLine is the first line of
-// the comment block (inclusive) and endLine is the first non-comment line after
-// the block (exclusive). Returns (-1, -1) if no comment block is found.
+// the comment block (inclusive) and endLine is the first line after the block
+// (exclusive). Returns (-1, -1) if no comment block is found.
 func findCommentBlock(lines []string, lineIdx int) (int, int) {
 	if lineIdx <= 0 {
 		return -1, -1
 	}
 
-	// Walk backwards from lineIdx-1, skipping blank lines
 	i := lineIdx - 1
 	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
 		i--
 	}
 
-	if i < 0 {
+	if i < 0 || !isCommentLine(lines[i]) {
 		return -1, -1
 	}
 
-	// Check if we found a comment line
-	trimmed := strings.TrimSpace(lines[i])
-	isComment := strings.HasPrefix(trimmed, "//") ||
-		strings.HasPrefix(trimmed, "#") ||
-		strings.HasPrefix(trimmed, "///") ||
-		strings.HasPrefix(trimmed, "\"\"\"") ||
-		strings.HasPrefix(trimmed, "'''") ||
-		strings.HasPrefix(trimmed, "/*") ||
-		strings.HasPrefix(trimmed, "*") ||
-		strings.HasPrefix(trimmed, "*/")
+	// endLine is exclusive — it's right past the last comment line (before any blank lines)
+	endLine := i + 1
 
-	if !isComment {
-		return -1, -1
-	}
-
-	// endLine is lineIdx (or i+1 if there were blank lines between comment and lineIdx)
-	endLine := lineIdx
-	if i+1 < lineIdx {
-		// There were blank lines between the comment and the target
-		// Include them in the block to remove
-		endLine = i + 1
-	}
-
-	// Walk further back to find the start of the comment block
-	// Include contiguous comment lines and blank lines between them
 	startLine := i
 	for startLine > 0 {
 		prev := strings.TrimSpace(lines[startLine-1])
-		if strings.HasPrefix(prev, "//") ||
-			strings.HasPrefix(prev, "#") ||
-			strings.HasPrefix(prev, "///") ||
-			strings.HasPrefix(prev, "\"\"\"") ||
-			strings.HasPrefix(prev, "'''") ||
-			strings.HasPrefix(prev, "/*") ||
-			strings.HasPrefix(prev, "*") ||
-			strings.HasPrefix(prev, "*/") ||
-			prev == "" {
+		if prev == "" || isCommentLine(lines[startLine-1]) {
 			startLine--
 		} else {
 			break

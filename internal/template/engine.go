@@ -138,14 +138,14 @@ func brief(name string, params []symbol.Param, returns []string) string {
 	}
 
 	if len(returns) > 0 {
-		parts = append(parts, "and returns the result.")
-	} else if len(params) > 0 {
-		// Add closing period for sentences with params but no returns
+		parts = append(parts, "and returns the result")
 	}
 
-	if !strings.HasSuffix(parts[len(parts)-1], ".") {
-		parts[len(parts)-1] = parts[len(parts)-1] + "."
+	last := parts[len(parts)-1]
+	if !strings.HasSuffix(last, ".") {
+		last += "."
 	}
+	parts[len(parts)-1] = last
 
 	return strings.Join(parts, " ")
 }

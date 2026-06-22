@@ -145,4 +145,14 @@ git add queries/c/docs.scm
 git add queries/cpp/docs.scm
 git add queries/rust/docs.scm
 git add testdata/fixtures/
+# Phase 3 files
+git add internal/writer/writer.go
+git add internal/writer/writer_test.go
+git add cmd/deoxy/cmd/root.go
+git add cmd/deoxy/cmd/generate.go
+git add cmd/deoxy/cmd/init.go
+git add cmd/deoxy/cmd/watch.go
+git add cmd/deoxy/cmd/generate_test.go
+git add cmd/deoxy/main_test.go
+git add .planning/plans/phase-3.json
 ```
