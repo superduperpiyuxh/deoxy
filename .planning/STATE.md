@@ -5,8 +5,8 @@ progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 18
-  completed_plans: 10
-  percent: 50
+  completed_plans: 11
+  percent: 55
 ---
 
 # Project State: deoxy
@@ -15,16 +15,16 @@ progress:
 **Go version:** 1.26.3
 **Research date:** 2026-06-22
 **Core value:** A single CLI tool that auto-generates doc comments for multiple programming languages using tree-sitter AST analysis — no AI, no cloud, deterministic output.
-**Current focus:** Phase 2 (Template Engine) ✅ Completed
+**Current focus:** Phase 3 (CLI) ✅ Completed
 
 ## Current Position
 
-Phase: 2 of 6 (Template Engine) ✓ **Completed**
-Plan: phase-2 — 8 tasks executed across 4 waves
+Phase: 3 of 6 (CLI) ✓ **Completed**
+Plan: phase-3 — 6 tasks executed across 4 waves
 Status: Completed
-Last activity: 2026-06-22 — Phase 2 Template Engine complete
+Last activity: 2026-06-22 — Phase 3 CLI complete
 
-Progress: [████████░░] 50%
+Progress: [████████░░] 55%
 
 ## Phase 1 Completion Summary
 
@@ -55,6 +55,16 @@ Progress: [████████░░] 50%
 - **P2-T8**: `internal/generator/generator_test.go` — 9 end-to-end pipeline tests
 - **Verification**: go build, go vet, go test all pass. All 5 language templates produce correct output.
 
+## Phase 3 Completion Summary
+
+- **P3-T1**: `internal/writer/writer.go` — Writer struct with Generate/GenerateDir/GenerateAll methods, hasExistingComment, findCommentBlock, insertComment, toLines/fromLines (LF/CRLF), applyComments
+- **P3-T2**: `internal/writer/writer_test.go` — 9 test functions (29 subtests): insertComment (5 cases), hasExistingComment (8 cases), extractIndent (6 cases), toLines/fromLines (6 cases), integration, CRLF preservation, build directive preservation
+- **P3-T3**: `cmd/deoxy/cmd/{root,generate,init,watch}.go` — Cobra CLI with 3 subcommands, --diff/-d, --dry-run, --force/-f, --config/-c flags, .deoxy.yaml scaffolding, fsnotify watch skeleton
+- **P3-T4**: `go.mod`/`go.sum` — Added cobra v1.10.2, fsnotify v1.10.1 as direct dependencies
+- **P3-T5**: `cmd/deoxy/cmd/generate_test.go` — 11 tests: help output (4), init functional (3), generate integration (4) using direct RunE pattern
+- **P3-T6**: Force-overwrite fix — Added findCommentBlock and applyComments for --force mode; cmd.Printf for proper output routing
+- **Verification**: go build, go vet, go test all pass. deoxy --help/generate --help/init --help show correct output. Force mode replaces existing comments. Dry-run and diff preserve files. CRLF and build directives preserved.
+
 ## Performance Metrics
 
 | Phase | Duration | Tasks | Files | Test Count | Pass Rate |
@@ -62,6 +72,7 @@ Progress: [████████░░] 50%
 | 0 | - | 8 | ~12 | 1 | 100% |
 | 1 | ~8 min | 14 | 18 | 21 | 100% |
 | 2 | ~9 min | 8 | 14 | ~55 | 100% |
+| 3 | ~12 min | 6 | 10 | ~95 | 100% |
 
 ## Accumulated Context
 
@@ -80,19 +91,24 @@ Progress: [████████░░] 50%
 - **Template system**: Uses Go text/template (stdlib only) + FuncMap for all helper functions
 - **Golden file tests**: -update flag pattern with per-language expected output files in testdata/golden/
 - **Config merge**: Per-language overrides merged onto language-specific defaults by GetLanguageConfig()
+- **Direct RunE test pattern**: Generate tests call generateCmd.RunE directly with pre-set flags to avoid cobra/pflag global state pollution
+- **Bottom-up insertion**: Writer applies insertions in descending line order so earlier insertions don't break later offset calculations
+- **findCommentBlock**: For force mode, Writer scans upward from function to detect contiguous comment block extent for replacement
+- **cmd.Printf for output**: Use cmd.Printf/cmd.Println instead of fmt.Printf so output routes through cobra's parent command chain for test capture
 
 ### Pending Todos
 
-None yet.
+- Wire watcher regeneration callback in cmd/deoxy/cmd/watch.go (skeleton only, prints events but no regeneration)
+- Add stdin/stdout mode for IDE integration (Phase 4)
 
 ### Blockers/Concerns
 
-- tree-sitter parsers are not thread-safe — parallel file processing requires per-file parser instances (Phase 3)
+- tree-sitter parsers are not thread-safe — parallel file processing requires per-file parser instances (resolved in Phase 3: writer processes files sequentially)
 
 ## Session Continuity
 
 Last session: 2026-06-22
-Stopped at: Phase 2 (Template Engine) fully implemented and verified
+Stopped at: Phase 3 (CLI) fully implemented and verified
 Resume file: None
 
 ## Commit Instructions

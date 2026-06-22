@@ -11,7 +11,7 @@
 - [x] **Phase 0: Foundation** — Project scaffolding, module init, CI, README, directory structure
 - [x] **Phase 1: Core Parser Engine** — Tree-sitter integration, language registry, query files, AST extraction
 - [x] **Phase 2: Template Engine** — Go text/template-based doc generation, per-language comment templates, config system
-- [ ] **Phase 3: CLI** — Cobra CLI with generate/init/watch commands, source injection, stdin/stdout mode
+- [x] **Phase 3: CLI** — Cobra CLI with generate/init/watch commands, source injection, stdin/stdout mode
 - [ ] **Phase 4: VS Code Extension** — Thin TypeScript extension + Go sidecar via JSON-RPC over stdio
 - [ ] **Phase 5: Advanced Features** — Smart text (getter/setter/ctor detection), alignment, custom tags, git-aware mode
 
@@ -142,8 +142,16 @@ Plans:
   - Do NOT implement smart text inference (Phase 5)
   - Do NOT implement git-aware mode (Phase 5)
   - Do NOT build a documentation site generator (out of scope permanently)
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 6 tasks across 4 waves
+**Plan file**: `.planning/phases/03-cli/phase-3-SUMMARY.md`
+
+Plans:
+- [x] P3-T1 — `internal/writer/writer.go` — Writer struct with Generate/GenerateDir/GenerateAll, comment detection, insertion, CRLF preservation
+- [x] P3-T2 — `internal/writer/writer_test.go` — Writer unit and integration tests (29 subtests)
+- [x] P3-T3 — `cmd/deoxy/cmd/{root,generate,init,watch}.go` — Cobra CLI with 3 subcommands
+- [x] P3-T4 — `go.mod`/`go.sum` — Add cobra, fsnotify dependencies
+- [x] P3-T5 — `cmd/deoxy/cmd/generate_test.go` — Comprehensive cmd tests (11 tests)
+- [x] P3-T6 — Writer force-overwrite and cmd output routing fixes
 
 ---
 
@@ -234,6 +242,6 @@ Phase 5 depends on Phase 3 (needs CLI config) but not Phase 4 (works without VS 
 | 0. Foundation | 8/8 | ✅ Completed | 2026-06-22 |
 | 1. Core Parser Engine | 14/14 | ✅ Completed | 2026-06-22 |
 | 2. Template Engine | 8/8 | ✅ Completed | 2026-06-22 |
-| 3. CLI | 0/0 | Not started | - |
+| 3. CLI | 6/6 | ✅ Completed | 2026-06-22 |
 | 4. VS Code Extension | 0/0 | Not started | - |
 | 5. Advanced Features | 0/0 | Not started | - |
