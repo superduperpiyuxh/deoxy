@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -266,17 +267,17 @@ func hasExistingComment(content []byte, startLine int) bool {
 		return false
 	}
 
-	lines := strings.Split(string(content), "\n")
+	lines := bytes.Split(content, []byte("\n"))
 	if startLine <= 0 || startLine >= len(lines) {
 		return false
 	}
 
 	for line := startLine - 1; line >= 0; line-- {
-		trimmed := strings.TrimSpace(lines[line])
-		if trimmed == "" {
+		trimmed := bytes.TrimSpace(lines[line])
+		if len(trimmed) == 0 {
 			continue
 		}
-		if isCommentLine(trimmed) {
+		if isCommentLine(string(trimmed)) {
 			return true
 		}
 		return false
