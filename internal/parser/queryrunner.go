@@ -252,6 +252,18 @@ func extractGoParam(node *sitter.Node, src []byte) symbol.Param {
 	nameNode := node.ChildByFieldName("name")
 	if nameNode != nil {
 		param.Name = nameNode.Utf8Text(src)
+	} else if typeNode := node.ChildByFieldName("type"); typeNode != nil {
+		// No name child but type exists — extract identifier from node text.
+		// This handles "a, b int" where tree-sitter-go produces two
+		// parameter_declaration nodes; the second has no name field
+		// but the identifier is still present in the source text.
+		text := node.Utf8Text(src)
+		typeText := typeNode.Utf8Text(src)
+		if idx := strings.LastIndex(text, typeText); idx > 0 {
+			param.Name = strings.TrimSpace(text[:idx])
+		} else {
+			param.Name = text
+		}
 	}
 
 	// Look for type child
@@ -330,8 +342,23 @@ func parseReturnTypes(node *sitter.Node, lang string, src []byte) []string {
 
 	switch lang {
 	case "go":
-		// Go return types may be multiple (func() (int, error))
-		// For simplicity, return the full text
+		// Go return types may be multiple: func() (int, error)
+		// Split on top-level commas, preserving parentheses groupings.
+		inner := text
+		if strings.HasPrefix(inner, "(") && strings.HasSuffix(inner, ")") {
+			inner = inner[1 : len(inner)-1]
+		}
+		parts := splitTopLevelCommas(inner)
+		var results []string
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				results = append(results, trimmed)
+			}
+		}
+		if len(results) > 0 {
+			return results
+		}
 		return []string{text}
 	case "python":
 		return []string{text}
@@ -340,6 +367,32 @@ func parseReturnTypes(node *sitter.Node, lang string, src []byte) []string {
 	default:
 		return []string{text}
 	}
+}
+
+// splitTopLevelCommas splits a string by commas at the top nesting level,
+// respecting parentheses groupings. This correctly handles types like
+// "func(x int) bool, error" without splitting on the comma inside func().
+func splitTopLevelCommas(s string) []string {
+	var parts []string
+	depth := 0
+	start := 0
+	for i, ch := range s {
+		switch ch {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
 }
 
 // parseReceiver extracts the receiver parameter (for Go methods).
