@@ -3,7 +3,10 @@ package cmd
 import (
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/cobra"
@@ -45,6 +48,10 @@ full regeneration pipeline are not yet implemented.`,
 
 		fmt.Printf("Watching %s for changes... (Ctrl+C to stop)\n", absPath)
 
+		// Set up signal handling for clean shutdown
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 		for {
 			select {
 			case event := <-watcher.Events:
@@ -59,6 +66,9 @@ full regeneration pipeline are not yet implemented.`,
 				}
 			case err := <-watcher.Errors:
 				log.Printf("Watch error: %v\n", err)
+			case <-sigCh:
+				fmt.Println("\nShutting down...")
+				return nil
 			}
 		}
 	},
