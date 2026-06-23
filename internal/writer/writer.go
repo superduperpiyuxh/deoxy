@@ -114,6 +114,36 @@ func (w *Writer) GenerateDir(dirPath string) ([]FileEdit, error) {
 	return w.GenerateAll(scanResult)
 }
 
+// GenerateFile processes a single file entry and returns the computed edit.
+func (w *Writer) GenerateFile(entry scanner.FileEntry) (*FileEdit, error) {
+	result, err := w.gen.Run([]string{entry.Path})
+	if err != nil {
+		return nil, err
+	}
+	if len(result.Files) == 0 {
+		return nil, nil
+	}
+	fileResult := result.Files[0]
+	if fileResult.ParseError != nil {
+		return nil, fmt.Errorf("writer: parse error for %q: %w", entry.Path, fileResult.ParseError)
+	}
+	if len(fileResult.Comments) == 0 {
+		return nil, nil
+	}
+	src, err := os.ReadFile(entry.Path)
+	if err != nil {
+		return nil, err
+	}
+	edits, err := w.applyComments(entry.Path, src, fileResult.Comments)
+	if err != nil {
+		return nil, err
+	}
+	if len(edits) > 0 {
+		return &edits[0], nil
+	}
+	return nil, nil
+}
+
 // GenerateAll processes all files from a scanner result, running each through
 // the generator and computing edits.
 func (w *Writer) GenerateAll(scanResult *scanner.Result) ([]FileEdit, error) {
