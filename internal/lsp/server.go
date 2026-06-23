@@ -38,7 +38,7 @@ func (s *Server) Initialize(ctx context.Context, params *protocol.InitializePara
 		Capabilities: protocol.ServerCapabilities{
 			TextDocumentSync: protocol.TextDocumentSyncKindFull,
 			CodeActionProvider: &protocol.CodeActionOptions{
-				CodeActionKinds: []protocol.CodeActionKind{protocol.CodeActionKindQuickFix},
+				CodeActionKinds: []protocol.CodeActionKind{protocol.CodeActionKindSource},
 			},
 		},
 	}, nil
@@ -161,6 +161,7 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 
 	lang := detectLanguage(path)
 	if lang == "" {
+		log.Printf("lsp: unknown language for file %q", path)
 		return nil, nil
 	}
 
@@ -177,7 +178,7 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 
 	var target *generator.SymbolComment
 	for i, c := range comments {
-		if cursorLine >= c.StartLine && cursorLine <= c.EndLine {
+		if cursorLine >= c.StartLine-1 && cursorLine <= c.EndLine+1 {
 			target = &comments[i]
 			break
 		}
@@ -190,7 +191,7 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 		return nil, nil
 	}
 
-	kind := protocol.CodeActionKindQuickFix
+	kind := protocol.CodeActionKindSource
 	preferred := true
 
 	return []protocol.CommandOrCodeAction{

@@ -41,8 +41,12 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('deoxy.generateDoc', () => {
       vscode.commands.executeCommand('editor.action.codeAction', {
-        kind: 'quickfix',
+        kind: 'source',
         apply: 'ifSingle',
+      }).then((result: any) => {
+        if (!result) {
+          vscode.window.showInformationMessage('No symbol found at cursor position');
+        }
       });
     })
   );
