@@ -52,11 +52,7 @@ Designed for VS Code extension via vscode-languageclient.`,
 
 		server := lsp.NewServer(gen, cancel)
 		stream := jsonrpc2.NewStream(&stdioReadWriter{Reader: os.Stdin, Writer: os.Stdout})
-		srv, conn, err := protocol.NewServer(ctx, server, stream)
-		if err != nil {
-			return fmt.Errorf("lsp server initialization failed: %w", err)
-		}
-		_ = srv
+		_, conn, _ := protocol.NewServer(ctx, server, stream)
 
 		fmt.Fprintf(os.Stderr, "deoxy serve exited: %v\n", <-conn.Done())
 		return nil
