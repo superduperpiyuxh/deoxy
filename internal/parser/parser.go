@@ -53,18 +53,24 @@ func NewManager() (*Manager, error) {
 // Parse parses source code for the given language, returning a new tree.
 // The caller is responsible for calling tree.Close() on the returned tree.
 // Returns an error if the language is not supported.
+//
+// The mutex is held across the entire C call to prevent Close() from freeing
+// the underlying C parser (ts_parser*) while Parse is using it, which would
+// cause a use-after-free in C heap memory. This serializes Parse calls across
+// all languages, which is acceptable because tree-sitter C code may not be
+// fully thread-safe.
 func (m *Manager) Parse(lang string, src []byte) (*sitter.Tree, error) {
 	m.mu.Lock()
-	parser, ok := m.parsers[lang]
-	m.mu.Unlock()
+	defer m.mu.Unlock()
 
+	parser, ok := m.parsers[lang]
 	if !ok {
 		return nil, fmt.Errorf("parser: unsupported language %q", lang)
 	}
 
 	tree := parser.Parse(src, nil)
 	if tree == nil {
-		return nil, nil // tree-sitter handles empty source gracefully
+		return nil, nil
 	}
 	return tree, nil
 }
