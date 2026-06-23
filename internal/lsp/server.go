@@ -13,6 +13,13 @@ import (
 	"go.lsp.dev/uri"
 )
 
+const maxDocumentSize = 100 * 1024 * 1024
+
+type documentState struct {
+	content []byte
+	version int32
+}
+
 type Server struct {
 	protocol.UnimplementedServer
 
@@ -64,7 +71,18 @@ func (s *Server) WorkDoneProgressCancel(ctx context.Context, params *protocol.Wo
 }
 
 func (s *Server) DidOpen(ctx context.Context, params *protocol.DidOpenTextDocumentParams) error {
-	s.documents.Store(params.TextDocument.URI, []byte(params.TextDocument.Text))
+	if len(params.TextDocument.Text) > maxDocumentSize {
+		log.Printf("lsp: document too large (%d bytes), rejecting", len(params.TextDocument.Text))
+		return nil
+	}
+	if !isFileURI(params.TextDocument.URI) {
+		log.Printf("lsp: ignoring non-file URI %q", params.TextDocument.URI)
+		return nil
+	}
+	s.documents.Store(params.TextDocument.URI, &documentState{
+		content: []byte(params.TextDocument.Text),
+		version: params.TextDocument.Version,
+	})
 	return nil
 }
 
@@ -72,8 +90,31 @@ func (s *Server) DidChange(ctx context.Context, params *protocol.DidChangeTextDo
 	if len(params.ContentChanges) == 0 {
 		return nil
 	}
+	if !isFileURI(params.TextDocument.URI) {
+		return nil
+	}
+
+	raw, ok := s.documents.Load(params.TextDocument.URI)
+	if !ok {
+		return nil
+	}
+	state, ok := raw.(*documentState)
+	if !ok {
+		return nil
+	}
+
+	if state.version > params.TextDocument.Version {
+		return nil
+	}
+
 	text := textFromChangeEvent(params.ContentChanges[len(params.ContentChanges)-1])
-	s.documents.Store(params.TextDocument.URI, []byte(text))
+	if len(text) > maxDocumentSize {
+		log.Printf("lsp: updated document too large (%d bytes), rejecting", len(text))
+		return nil
+	}
+
+	state.content = []byte(text)
+	state.version = params.TextDocument.Version
 	return nil
 }
 
@@ -96,14 +137,18 @@ func (s *Server) DidClose(ctx context.Context, params *protocol.DidCloseTextDocu
 
 func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionParams) ([]protocol.CommandOrCodeAction, error) {
 	docURI := params.TextDocument.URI
+	if !isFileURI(docURI) {
+		return nil, nil
+	}
+
 	raw, ok := s.documents.Load(docURI)
 	if !ok {
 		return nil, nil
 	}
 
-	content, ok := raw.([]byte)
+	state, ok := raw.(*documentState)
 	if !ok {
-		log.Println("lsp: stored document content has unexpected type")
+		log.Println("lsp: stored document state has unexpected type")
 		return nil, nil
 	}
 
@@ -120,7 +165,7 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 
 	cursorLine := int(params.Range.Start.Line)
 
-	comments, err := s.gen.ProcessContent(path, content, lang)
+	comments, err := s.gen.ProcessContent(path, state.content, lang)
 	if err != nil {
 		log.Printf("lsp: ProcessContent(%q): %v", path, err)
 		return nil, nil
@@ -140,7 +185,7 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 		return nil, nil
 	}
 
-	if hasExistingComment(content, target.StartLine) {
+	if hasExistingComment(state.content, target.StartLine) {
 		return nil, nil
 	}
 
@@ -169,6 +214,11 @@ func (s *Server) CodeAction(ctx context.Context, params *protocol.CodeActionPara
 	}, nil
 }
 
+func isFileURI(docURI uri.URI) bool {
+	s := string(docURI)
+	return strings.HasPrefix(s, "file://") || strings.HasPrefix(s, "file:")
+}
+
 func filePathFromURI(docURI uri.URI) (string, error) {
 	path := docURI.FsPath()
 	if path != "" {
@@ -194,18 +244,13 @@ func textFromChangeEvent(event protocol.TextDocumentContentChangeEvent) string {
 }
 
 func detectLanguage(path string) string {
-	base := strings.ToLower(filepath.Base(path))
 	ext := strings.ToLower(filepath.Ext(path))
-
 	switch ext {
 	case ".go":
 		return "go"
 	case ".py":
 		return "python"
 	case ".c", ".h":
-		if ext == ".h" || strings.HasSuffix(base, ".h") {
-			return "c"
-		}
 		return "c"
 	case ".cpp", ".cc", ".cxx", ".hpp":
 		return "cpp"
@@ -243,13 +288,21 @@ func isCommentLine(line string) bool {
 	if len(line) == 0 {
 		return false
 	}
+	if isBuildDirective(line) {
+		return false
+	}
 	return strings.HasPrefix(line, "//") ||
 		strings.HasPrefix(line, "#") ||
-		strings.HasPrefix(line, "///") ||
-		strings.HasPrefix(line, "/**") ||
+		strings.HasPrefix(line, "\"\"\"") ||
+		strings.HasPrefix(line, "'''") ||
 		strings.HasPrefix(line, "/*") ||
 		strings.HasPrefix(line, "*") ||
-		strings.HasPrefix(line, "\"\"\"")
+		strings.HasPrefix(line, "*/")
 }
 
-
+func isBuildDirective(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "//go:") ||
+		strings.HasPrefix(trimmed, "// +") ||
+		strings.HasPrefix(trimmed, "//export")
+}

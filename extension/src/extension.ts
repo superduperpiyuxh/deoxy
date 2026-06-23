@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
   };
 
   client = new LanguageClient('deoxy', 'deoxy LSP Server', serverOptions, clientOptions);
-  client.start();
+  context.subscriptions.push(client.start());
 
   context.subscriptions.push(
     vscode.commands.registerCommand('deoxy.generateDoc', () => {

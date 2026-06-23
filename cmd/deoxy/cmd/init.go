@@ -34,11 +34,6 @@ The command will fail if .deoxy.yaml already exists.`,
 
 		path := filepath.Join(dir, ".deoxy.yaml")
 
-		// Check if already exists
-		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("%s already exists", path)
-		}
-
 		// Generate default config
 		cfg := config.LoadDefaultConfig()
 		data, err := cfg.MarshalYAML()
@@ -52,8 +47,22 @@ The command will fail if .deoxy.yaml already exists.`,
 			"# See https://github.com/superduperpiyuxh/deoxy for documentation\n" +
 			string(data)
 
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		// Create atomically with O_EXCL to prevent TOCTOU races
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		if err != nil {
+			if os.IsExist(err) {
+				return fmt.Errorf("%s already exists", path)
+			}
+			return fmt.Errorf("creating %s: %w", path, err)
+		}
+
+		if _, err := f.Write([]byte(content)); err != nil {
+			f.Close()
+			os.Remove(path)
 			return fmt.Errorf("writing %s: %w", path, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("closing %s: %w", path, err)
 		}
 
 		fmt.Printf("Created %s\n", path)
