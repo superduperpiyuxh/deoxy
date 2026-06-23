@@ -9,6 +9,12 @@ import (
 	"github.com/superduperpiyuxh/deoxy/internal/symbol"
 )
 
+type AlignedParam struct {
+	Name string
+	Type string
+	Desc string
+}
+
 type TemplateData struct {
 	Name        string
 	Kind        string
@@ -19,6 +25,8 @@ type TemplateData struct {
 	HasReceiver bool
 	Brief       string
 	Lang        string
+	Aligned     []AlignedParam
+	CustomTags  []string
 }
 
 type Engine struct {
@@ -59,7 +67,7 @@ func New(tpls map[string]string, opts ...Option) (*Engine, error) {
 	return e, nil
 }
 
-func (e *Engine) Render(info symbol.SymbolInfo, lang string) (string, error) {
+func (e *Engine) Render(info symbol.SymbolInfo, lang string, customTags ...string) (string, error) {
 	tmpl, ok := e.templates[lang]
 	if !ok {
 		return "", fmt.Errorf("unknown language: %s", lang)
@@ -69,15 +77,21 @@ func (e *Engine) Render(info symbol.SymbolInfo, lang string) (string, error) {
 		return "", nil
 	}
 
+	aligned := makeAligned(info.Params, func(i int) string {
+		return e.paramDesc(info.Params, i)
+	})
+
 	data := TemplateData{
-		Name:        info.Name,
-		Kind:        info.Kind.String(),
-		Params:      info.Params,
-		Returns:     info.Returns,
-		TypeParams:  info.TypeParams,
-		Receiver:    info.Receiver,
+		Name:       info.Name,
+		Kind:       info.Kind.String(),
+		Params:     info.Params,
+		Returns:    info.Returns,
+		TypeParams: info.TypeParams,
+		Receiver:   info.Receiver,
 		HasReceiver: info.Receiver != nil,
-		Lang:        lang,
+		Lang:       lang,
+		Aligned:    aligned,
+		CustomTags: customTags,
 	}
 
 	data.Brief = e.brief(info.Name, info.Params, info.Returns)
@@ -101,6 +115,27 @@ func (e *Engine) sharedFuncs() template.FuncMap {
 		"hasReturns":    hasReturns,
 		"hasTypeParams": hasTypeParams,
 	}
+}
+
+func makeAligned(params []symbol.Param, descs func(int) string) []AlignedParam {
+	if len(params) == 0 {
+		return nil
+	}
+	maxName := 0
+	for _, p := range params {
+		if len(p.Name) > maxName {
+			maxName = len(p.Name)
+		}
+	}
+	result := make([]AlignedParam, len(params))
+	for i, p := range params {
+		result[i] = AlignedParam{
+			Name: p.Name + strings.Repeat(" ", maxName-len(p.Name)),
+			Type: p.Type,
+			Desc: descs(i),
+		}
+	}
+	return result
 }
 
 func (e *Engine) brief(name string, params []symbol.Param, returns []string) string {

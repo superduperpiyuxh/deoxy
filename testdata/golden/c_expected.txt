@@ -7,12 +7,12 @@
 /**
  * @brief process_buffers buffer and size and returns the result.
  * @param buffer the buffer
- * @param size the size
+ * @param size   the size
  * @return void the void result
  */
 /**
  * @brief divides dividend and divisor and returns the result.
  * @param dividend the dividend
- * @param divisor the divisor
+ * @param divisor  the divisor
  * @return int the int result
  */

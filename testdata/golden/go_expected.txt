@@ -12,7 +12,7 @@
 // Person persons.
 // FirstOrDefault firstOrDefaults items and defaultVal and returns the result.
 //
-// items - the items
+// items      - the items
 // defaultVal - the defaultVal
 //
 // returns T: the T result

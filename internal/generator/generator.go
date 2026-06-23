@@ -188,11 +188,11 @@ func (g *Generator) processFile(entry scanner.FileEntry) GeneratedFileResult {
 	templateKey := g.templateKeyForLanguage(entry.Language)
 
 	// Render each symbol
+	customTags := g.customTagsForLanguage(entry.Language)
 	var comments []SymbolComment
 	for _, sym := range symbols {
-		doc, err := g.engine.Render(sym, templateKey)
+		doc, err := g.engine.Render(sym, templateKey, customTags...)
 		if err != nil {
-			// Skip symbols that fail to render
 			continue
 		}
 		if doc == "" {
@@ -209,6 +209,12 @@ func (g *Generator) processFile(entry scanner.FileEntry) GeneratedFileResult {
 
 	res.Comments = comments
 	return res
+}
+
+// customTagsForLanguage returns the custom tags for a language from config.
+func (g *Generator) customTagsForLanguage(lang string) []string {
+	langCfg := g.config.GetLanguageConfig(lang)
+	return langCfg.CustomTags
 }
 
 // templateKeyForLanguage returns the appropriate template key for a language
@@ -260,10 +266,11 @@ func (g *Generator) ProcessContent(path string, content []byte, lang string) ([]
 	}
 
 	templateKey := g.templateKeyForLanguage(lang)
+	customTags := g.customTagsForLanguage(lang)
 
 	var comments []SymbolComment
 	for _, sym := range symbols {
-		doc, err := g.engine.Render(sym, templateKey)
+		doc, err := g.engine.Render(sym, templateKey, customTags...)
 		if err != nil {
 			continue
 		}
