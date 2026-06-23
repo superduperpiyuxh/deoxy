@@ -233,6 +233,50 @@ func (g *Generator) templateKeyForLanguage(lang string) string {
 	}
 }
 
+// ProcessContent parses and renders doc comments for in-memory content.
+// Used by the LSP server to process files opened in the editor without writing to disk.
+func (g *Generator) ProcessContent(path string, content []byte, lang string) ([]SymbolComment, error) {
+	tree, err := g.parser.Parse(lang, content)
+	if err != nil {
+		return nil, fmt.Errorf("generator: parse failed for %q: %w", path, err)
+	}
+	if tree == nil {
+		return nil, nil
+	}
+	defer tree.Close()
+
+	langCfg, ok := parser.GetLanguageConfig(lang)
+	if !ok {
+		return nil, fmt.Errorf("generator: unsupported language %q", lang)
+	}
+
+	symbols, err := parser.RunQuery(tree, langCfg.QueryContent, lang, content)
+	if err != nil {
+		return nil, fmt.Errorf("generator: query failed for %q: %w", path, err)
+	}
+
+	templateKey := g.templateKeyForLanguage(lang)
+
+	var comments []SymbolComment
+	for _, sym := range symbols {
+		doc, err := g.engine.Render(sym, templateKey)
+		if err != nil {
+			continue
+		}
+		if doc == "" {
+			continue
+		}
+		comments = append(comments, SymbolComment{
+			Symbol:     sym,
+			DocComment: doc,
+			StartLine:  sym.StartLine,
+			EndLine:    sym.EndLine,
+		})
+	}
+
+	return comments, nil
+}
+
 // Close releases all parser resources.
 // Implements io.Closer.
 func (g *Generator) Close() error {

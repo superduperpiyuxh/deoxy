@@ -1,0 +1,63 @@
+{
+  "name": "deoxy",
+  "publisher": "deoxy",
+  "displayName": "deoxy — Doc Comment Generator",
+  "description": "Generate idiomatic doc comments for Go, Python, C, C++, and Rust using the deoxy LSP server",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:go",
+    "onLanguage:python",
+    "onLanguage:c",
+    "onLanguage:cpp",
+    "onLanguage:rust"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "deoxy.generateDoc",
+        "title": "deoxy: Generate Doc Comment"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "deoxy.generateDoc",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d",
+        "when": "editorTextFocus && editorLangId =~ /^(go|python|c|cpp|rust)$/"
+      }
+    ],
+    "configuration": {
+      "title": "deoxy",
+      "properties": {
+        "deoxy.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the deoxy binary. If empty, the extension looks for a bundled binary in the extension directory, then checks the system PATH."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.96.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0",
+    "vscode-languageclient": "^9.0.0"
+  },
+  "scripts": {
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package"
+  },
+  "icon": "icon.png"
+}

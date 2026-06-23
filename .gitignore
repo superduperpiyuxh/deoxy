@@ -9,3 +9,8 @@ coverage/
 package-lock.json
 /deoxy
 /deoxy.exe
+
+# Build artifacts
+/build/
+/extension/dist/
+extension/bin/
