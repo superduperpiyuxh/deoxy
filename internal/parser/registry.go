@@ -37,11 +37,17 @@ type LanguageConfig struct {
 	Grammar func() unsafe.Pointer
 	// QueryContent is the embedded .scm query file content.
 	QueryContent string
+	// language is a cached *sitter.Language wrapper, initialized once.
+	language *sitter.Language
 }
 
 // GrammarAsLanguage wraps the grammar pointer as a *sitter.Language for use with queries.
+// The result is cached to avoid allocating a new wrapper on every call.
 func (c *LanguageConfig) GrammarAsLanguage() *sitter.Language {
-	return sitter.NewLanguage(c.Grammar())
+	if c.language == nil {
+		c.language = sitter.NewLanguage(c.Grammar())
+	}
+	return c.language
 }
 
 // registry is the internal map of language configs, populated at init time.
@@ -50,6 +56,8 @@ var extRegistry map[string]*LanguageConfig
 
 // registerLanguage adds a language to both name-based and extension-based registries.
 func registerLanguage(cfg *LanguageConfig) {
+	// Pre-cache the *sitter.Language wrapper since the grammar pointer is static.
+	cfg.language = sitter.NewLanguage(cfg.Grammar())
 	registry[cfg.Name] = cfg
 	for _, ext := range cfg.Extensions {
 		// First registration wins (handles .h → C, not C++)
