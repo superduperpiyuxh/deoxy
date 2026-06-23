@@ -16,17 +16,17 @@ type AlignedParam struct {
 }
 
 type TemplateData struct {
-	Name        string
-	Kind        string
-	Params      []symbol.Param
-	Returns     []string
-	TypeParams  []symbol.Param
-	Receiver    *symbol.Param
+	Name       string
+	Kind       string
+	Params     []symbol.Param
+	Returns    []string
+	TypeParams []symbol.Param
+	Receiver   *symbol.Param
 	HasReceiver bool
-	Brief       string
-	Lang        string
-	Aligned     []AlignedParam
-	CustomTags  []string
+	Brief      string
+	Lang       string
+	Aligned    []AlignedParam
+	CustomTags []string
 }
 
 type Engine struct {
@@ -72,13 +72,12 @@ func (e *Engine) Render(info symbol.SymbolInfo, lang string, customTags ...strin
 	if !ok {
 		return "", fmt.Errorf("unknown language: %s", lang)
 	}
-
 	if info.Name == "" {
 		return "", nil
 	}
 
 	aligned := makeAligned(info.Params, func(i int) string {
-		return e.paramDesc(info.Params, i)
+		return e.paramDesc(info.Params, info.Returns, i)
 	})
 
 	data := TemplateData{
@@ -94,20 +93,18 @@ func (e *Engine) Render(info symbol.SymbolInfo, lang string, customTags ...strin
 		CustomTags: customTags,
 	}
 
-	data.Brief = e.brief(info.Name, info.Params, info.Returns)
+	data.Brief = e.brief(info)
 
 	var buf strings.Builder
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("template: execution failed for %q rendering %q: %w", lang, info.Name, err)
 	}
-
 	return buf.String(), nil
 }
 
 func (e *Engine) sharedFuncs() template.FuncMap {
 	return template.FuncMap{
-		"brief":         e.brief,
-		"paramDesc":     e.paramDesc,
+		"paramDesc":     func(params []symbol.Param, ordinal int) string { return e.paramDesc(params, nil, ordinal) },
 		"returnDesc":    returnDesc,
 		"joinParams":    joinParams,
 		"commentPrefix": commentPrefix,
@@ -138,15 +135,46 @@ func makeAligned(params []symbol.Param, descs func(int) string) []AlignedParam {
 	return result
 }
 
-func (e *Engine) brief(name string, params []symbol.Param, returns []string) string {
+func (e *Engine) brief(info symbol.SymbolInfo) string {
+	name := info.Name
 	if name == "" {
 		return ""
 	}
 
+	switch info.Kind {
+	case symbol.KindStruct:
+		if e.smartTextEnabled {
+			if d := describeStruct(name, info.Params); d != "" {
+				return d
+			}
+		}
+		return lowerFirst(name) + " represents a " + lowerFirst(name) + "."
+
+	case symbol.KindInterface:
+		return lowerFirst(name) + " describes the contract for a " + lowerFirst(name) + "."
+
+	case symbol.KindEnum:
+		return lowerFirst(name) + " represents a " + lowerFirst(name) + " value."
+	}
+
 	if e.smartTextEnabled {
-		desc := smarttext.Describe(name, params, returns, e.smartReg)
+		desc := smarttext.Describe(name, info.Params, info.Returns, e.smartReg)
 		if desc != "" {
 			return desc
+		}
+	}
+
+	if info.Receiver != nil {
+		recvType := receiverBaseType(info.Receiver.Type)
+		if info.Kind == symbol.KindMethod && recvType != "" {
+			if len(info.Returns) > 0 {
+				return lowerFirst(name) + " returns a result for the " + lowerFirst(recvType) + "."
+			}
+			if len(info.Params) == 0 {
+				return lowerFirst(name) + " performs an operation on the " + lowerFirst(recvType) + "."
+			}
+			return lowerFirst(name) + " performs an operation on the " + lowerFirst(recvType) +
+				" with the given " + joinParamNames(info.Params) + "."
 		}
 	}
 
@@ -156,10 +184,10 @@ func (e *Engine) brief(name string, params []symbol.Param, returns []string) str
 	}
 
 	parts := []string{verb}
-	if len(params) > 0 {
-		parts = append(parts, joinParams(params))
+	if len(info.Params) > 0 {
+		parts = append(parts, joinParams(info.Params))
 	}
-	if len(returns) > 0 {
+	if len(info.Returns) > 0 {
 		parts = append(parts, "and returns the result")
 	}
 
@@ -172,12 +200,13 @@ func (e *Engine) brief(name string, params []symbol.Param, returns []string) str
 	return strings.Join(parts, " ")
 }
 
-func (e *Engine) paramDesc(params []symbol.Param, ordinal int) string {
+func (e *Engine) paramDesc(params []symbol.Param, returns []string, ordinal int) string {
 	if ordinal < 0 || ordinal >= len(params) {
 		return ""
 	}
 
 	name := params[ordinal].Name
+	ptype := params[ordinal].Type
 
 	if e.smartTextEnabled && name != "" {
 		if desc := e.smartReg.Get(name); desc != "" {
@@ -186,6 +215,13 @@ func (e *Engine) paramDesc(params []symbol.Param, ordinal int) string {
 	}
 
 	if name != "" && !isGenericParamName(name) {
+		if ptype != "" {
+			return describeTypedParam(name, ptype)
+		}
+		return "the " + name
+	}
+
+	if name != "" {
 		return "the " + name
 	}
 
@@ -194,6 +230,62 @@ func (e *Engine) paramDesc(params []symbol.Param, ordinal int) string {
 		return "the " + ordinals[ordinal] + " operand"
 	}
 	return fmt.Sprintf("the %dth parameter", ordinal+1)
+}
+
+func describeTypedParam(name, ptype string) string {
+	switch {
+	case strings.HasPrefix(ptype, "*"):
+		return "a pointer to the " + name
+	case strings.HasPrefix(ptype, "[]"):
+		return "a slice of " + name + " values"
+	case ptype == "error" || ptype == "Error":
+		return "an error indicating " + name
+	case ptype == "bool" || ptype == "Bool" || ptype == "boolean":
+		return "whether to " + name
+	case ptype == "string" || ptype == "String":
+		return "the " + name + " string"
+	case ptype == "int" || ptype == "int64" || ptype == "int32":
+		return "the " + name + " value"
+	case ptype == "float64" || ptype == "float32":
+		return "the " + name + " value"
+	case ptype == "context.Context" || ptype == "Context" || ptype == "ctx.Context":
+		return "the " + name
+	case ptype == "time.Duration" || ptype == "Duration":
+		return "the " + name + " duration"
+	case ptype == "[]byte":
+		return "the " + name + " data"
+	default:
+		return "the " + name
+	}
+}
+
+func receiverBaseType(recvType string) string {
+	recvType = strings.TrimLeft(recvType, "*&")
+	if idx := strings.LastIndex(recvType, "."); idx >= 0 {
+		return recvType[idx+1:]
+	}
+	return recvType
+}
+
+func describeStruct(name string, fields []symbol.Param) string {
+	if len(fields) == 0 {
+		return lowerFirst(name) + " represents a " + lowerFirst(name) + "."
+	}
+	var fieldNames []string
+	for _, f := range fields {
+		if f.Name != "" {
+			fieldNames = append(fieldNames, f.Name)
+		}
+	}
+	if len(fieldNames) == 0 {
+		return lowerFirst(name) + " represents a " + lowerFirst(name) + "."
+	}
+	if len(fieldNames) == 1 {
+		return lowerFirst(name) + " holds a " + fieldNames[0] + "."
+	}
+	last := fieldNames[len(fieldNames)-1]
+	joined := strings.Join(fieldNames[:len(fieldNames)-1], ", ") + " and " + last
+	return lowerFirst(name) + " holds the " + joined + "."
 }
 
 func isGenericParamName(name string) bool {
@@ -211,7 +303,7 @@ func returnDesc(returns []string) string {
 
 	parts := make([]string, len(returns))
 	for i, r := range returns {
-		parts[i] = "the " + r + " result"
+		parts[i] = typeReturnDesc(r, i)
 	}
 
 	if len(parts) == 1 {
@@ -223,16 +315,45 @@ func returnDesc(returns []string) string {
 	return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1]
 }
 
+func typeReturnDesc(rtype string, idx int) string {
+	switch {
+	case rtype == "error" || rtype == "Error":
+		return "an error, if any"
+	case rtype == "bool" || rtype == "Bool" || rtype == "boolean":
+		return "true if the operation succeeded, false otherwise"
+	case rtype == "string" || rtype == "String":
+		return "the resulting string"
+	case rtype == "int" || rtype == "int64" || rtype == "int32" || rtype == "uint" || rtype == "uint64":
+		return "the computed result"
+	case rtype == "float64" || rtype == "float32":
+		return "the computed floating-point result"
+	case strings.HasPrefix(rtype, "*"):
+		base := strings.TrimPrefix(rtype, "*")
+		return "a pointer to the resulting " + lowerFirst(base)
+	case strings.HasPrefix(rtype, "[]"):
+		elem := strings.TrimPrefix(rtype, "[]")
+		return "a slice of " + lowerFirst(elem) + " values"
+	case strings.HasPrefix(rtype, "map["):
+		return "a map of results"
+	case strings.HasPrefix(rtype, "("):
+		return "the result values"
+	default:
+		return "the " + rtype + " result"
+	}
+}
+
 func joinParams(params []symbol.Param) string {
+	return joinParamNames(params)
+}
+
+func joinParamNames(params []symbol.Param) string {
 	if len(params) == 0 {
 		return ""
 	}
-
 	names := make([]string, len(params))
 	for i, p := range params {
 		names[i] = p.Name
 	}
-
 	if len(names) == 1 {
 		return names[0]
 	}

@@ -2,19 +2,19 @@
 
 Args:
     name (str): the name
-    age (int): the age
+    age (int): the age value
 
 Returns:
     str: the str result
 """
-"""adds a and b and returns the result.
+"""add returns a result for the calculator.
 
 Args:
-    a (int): the first operand
-    b (int): the second operand
+    a (int): the a
+    b (int): the b
 
 Returns:
-    int: the int result
+    int: the computed result
 """
 """calculators.
 """

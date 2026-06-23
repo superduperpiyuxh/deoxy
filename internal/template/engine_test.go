@@ -358,7 +358,12 @@ func TestBriefFunction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			got := eng.brief(tt.funcName, tt.params, tt.returns)
+			got := eng.brief(symbol.SymbolInfo{
+				Name:    tt.funcName,
+				Kind:    symbol.KindFunction,
+				Params:  tt.params,
+				Returns: tt.returns,
+			})
 			if tt.want[0] == "" && got != "" {
 				t.Errorf("brief(%q, ...) = %q, want empty string", tt.funcName, got)
 			}
@@ -381,14 +386,14 @@ func TestParamDescFunction(t *testing.T) {
 
 	t.Run("with valid params", func(t *testing.T) {
 		params := []symbol.Param{{Name: "a", Type: "int"}}
-		got := eng.paramDesc(params, 0)
+		got := eng.paramDesc(params, nil, 0)
 		if got == "" {
 			t.Error("paramDesc should return non-empty string")
 		}
 	})
 
 	t.Run("with empty params", func(t *testing.T) {
-		got := eng.paramDesc(nil, 0)
+		got := eng.paramDesc(nil, nil, 0)
 		if got != "" {
 			t.Errorf("paramDesc with empty params should return empty string, got: %q", got)
 		}
@@ -396,17 +401,17 @@ func TestParamDescFunction(t *testing.T) {
 
 	t.Run("with descriptive param name", func(t *testing.T) {
 		params := []symbol.Param{{Name: "name", Type: "string"}}
-		got := eng.paramDesc(params, 0)
+		got := eng.paramDesc(params, nil, 0)
 		if !strings.Contains(got, "name") {
 			t.Errorf("paramDesc should contain param name, got: %q", got)
 		}
 	})
 
-	t.Run("generic param name uses ordinal fallback", func(t *testing.T) {
+	t.Run("generic param name uses name fallback", func(t *testing.T) {
 		params := []symbol.Param{{Name: "a", Type: "int"}}
-		got := eng.paramDesc(params, 0)
-		if !strings.Contains(got, "first") {
-			t.Errorf("generic param 'a' should use ordinal, got: %q", got)
+		got := eng.paramDesc(params, nil, 0)
+		if !strings.Contains(got, "the a") {
+			t.Errorf("generic param 'a' should describe by name, got: %q", got)
 		}
 	})
 
@@ -419,7 +424,7 @@ func TestParamDescFunction(t *testing.T) {
 			{Name: "e", Type: "int"},
 			{Name: "f", Type: "int"},
 		}
-		got := eng.paramDesc(params, 5)
+		got := eng.paramDesc(params, nil, 5)
 		if !strings.Contains(got, "the") {
 			t.Errorf("6th param should start with 'the', got: %q", got)
 		}
@@ -427,7 +432,7 @@ func TestParamDescFunction(t *testing.T) {
 
 	t.Run("negative ordinal returns empty", func(t *testing.T) {
 		params := []symbol.Param{{Name: "a", Type: "int"}}
-		got := eng.paramDesc(params, -1)
+		got := eng.paramDesc(params, nil, -1)
 		if got != "" {
 			t.Errorf("negative ordinal should return empty, got: %q", got)
 		}
@@ -435,7 +440,7 @@ func TestParamDescFunction(t *testing.T) {
 
 	t.Run("ordinal beyond length returns empty", func(t *testing.T) {
 		params := []symbol.Param{{Name: "a", Type: "int"}}
-		got := eng.paramDesc(params, 5)
+		got := eng.paramDesc(params, nil, 5)
 		if got != "" {
 			t.Errorf("out-of-bounds ordinal should return empty, got: %q", got)
 		}
@@ -443,7 +448,7 @@ func TestParamDescFunction(t *testing.T) {
 
 	t.Run("empty param name uses ordinal", func(t *testing.T) {
 		params := []symbol.Param{{Name: "", Type: "int"}}
-		got := eng.paramDesc(params, 0)
+		got := eng.paramDesc(params, nil, 0)
 		if !strings.Contains(got, "first operand") {
 			t.Errorf("empty name should use ordinal, got: %q", got)
 		}
@@ -481,7 +486,7 @@ func TestReturnDescFunction(t *testing.T) {
 
 	t.Run("single return includes type", func(t *testing.T) {
 		got := returnDesc([]string{"*Person"})
-		if !strings.Contains(got, "Person") {
+		if !strings.Contains(got, "person") {
 			t.Errorf("single return should include type, got: %q", got)
 		}
 	})

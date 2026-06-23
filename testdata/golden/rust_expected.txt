@@ -1,13 +1,13 @@
 /// adds a and b and returns the result.
 ///
-/// * `a` - the first operand
-/// * `b` - the second operand
+/// * `a` - the a
+/// * `b` - the b
 ///
 /// Returns: the i32 result
-/// news x and y and returns the result.
+/// new returns a result for the point.
 ///
-/// * `x` - the first operand
-/// * `y` - the second operand
+/// * `x` - the x
+/// * `y` - the y
 ///
 /// Returns: the Self result
-/// points.
+/// point represents a point.

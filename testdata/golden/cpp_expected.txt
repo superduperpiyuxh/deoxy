@@ -1,8 +1,8 @@
 /**
  * @brief free_functions x and y and returns the result.
- * @param x the first operand
- * @param y the second operand
- * @return int the int result
+ * @param x the x
+ * @param y the y
+ * @return int the computed result
  */
 /**
  * @brief calculators.
