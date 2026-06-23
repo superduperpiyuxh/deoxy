@@ -93,12 +93,11 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var firstErr error
 	for lang, parser := range m.parsers {
 		parser.Close()
 		delete(m.parsers, lang)
 	}
-	return firstErr
+	return nil
 }
 
 // getSupportedLanguageNames returns the canonical list of supported language names.
