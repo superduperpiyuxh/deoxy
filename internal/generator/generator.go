@@ -81,7 +81,11 @@ func New(cfg *config.Config) (*Generator, error) {
 		return nil, fmt.Errorf("generator: failed to create parser manager: %w", err)
 	}
 
-	eng, err := template.New(template.GetDefaultTemplates())
+	var engOpts []template.Option
+	if cfg.SmartText != nil && cfg.SmartText.Enabled {
+		engOpts = append(engOpts, template.WithSmartText(true, cfg.SmartText.Descriptions))
+	}
+	eng, err := template.New(template.GetDefaultTemplates(), engOpts...)
 	if err != nil {
 		pm.Close()
 		return nil, fmt.Errorf("generator: failed to create template engine: %w", err)

@@ -93,6 +93,12 @@ func ParseTagOrder(s string) (TagOrder, error) {
 	}
 }
 
+// SmartTextConfig controls context-aware description generation.
+type SmartTextConfig struct {
+	Enabled      bool              `yaml:"enabled,omitempty"`
+	Descriptions map[string]string `yaml:"descriptions,omitempty"`
+}
+
 // LanguageConfig holds per-language configuration overrides.
 type LanguageConfig struct {
 	DocStyle       string   `yaml:"docstyle,omitempty"`
@@ -109,6 +115,7 @@ type Config struct {
 	Languages       map[string]LanguageConfig `yaml:"languages,omitempty"`
 	DefaultDocStyle string                    `yaml:"default_style,omitempty"`
 	DefaultTagOrder string                    `yaml:"default_tag_order,omitempty"`
+	SmartText       *SmartTextConfig          `yaml:"smart_text,omitempty"`
 }
 
 // LoadDefaultConfig returns a Config with all default values.
