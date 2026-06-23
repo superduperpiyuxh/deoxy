@@ -13,7 +13,7 @@
 - [x] **Phase 2: Template Engine** — Go text/template-based doc generation, per-language comment templates, config system
 - [x] **Phase 3: CLI** — Cobra CLI with generate/init/watch commands, source injection, stdin/stdout mode
 - [ ] **Phase 4: VS Code Extension** — Thin TypeScript extension + Go sidecar via JSON-RPC over stdio
-- [ ] **Phase 5: Advanced Features** — Smart text (getter/setter/ctor detection), alignment, custom tags, git-aware mode
+- [x] **Phase 5: Advanced Features** — Smart text (getter/setter/ctor detection), alignment, custom tags, git-aware mode
 
 ## Phase Details
 
@@ -244,4 +244,4 @@ Phase 5 depends on Phase 3 (needs CLI config) but not Phase 4 (works without VS 
 | 2. Template Engine | 8/8 | ✅ Completed | 2026-06-22 |
 | 3. CLI | 6/6 | ✅ Completed | 2026-06-22 |
 | 4. VS Code Extension | 0/0 | Not started | - |
-| 5. Advanced Features | 0/0 | Not started | - |
+| 5. Advanced Features | 10/10 | ✅ Completed | 2026-06-23 |
